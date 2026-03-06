@@ -42,15 +42,13 @@ Performance_Testing/
 ## Agent 工作流程
 
 ```
-1. 环境检测 (env_detector.py)
+1. 加载配置 (config_loader.py + perf_config.yaml)
    ↓
-2. 加载配置 (config_loader.py + perf_config.yaml)
+2. 执行测试 (runner.py)
    ↓
-3. 执行测试 (runner.py)
+3. 解析结果 (parser.py)
    ↓
-4. 解析结果 (parser.py)
-   ↓
-5. 生成报告 (reporter.py → output/)
+4. 生成报告 (reporter.py → output/)
 ```
 
 ## 文件权限规则
@@ -94,6 +92,4 @@ python -m pytest tests/
 # 执行性能测试
 python src/perf.py --config config/perf_config.yaml
 
-# 环境检测
-bash scripts/detect_env.sh
 ```
