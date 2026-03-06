@@ -2,24 +2,98 @@
 # 由上游 skill 写入，下游 skill 读取
 #
 # 使用说明:
-#   - Container_Deploy skill 启动服务后写入此文件
-#   - Performance_Testing skill 读取此文件获取连接信息
-#   - 也可手动编辑此文件进行测试
+#   - flagos-model-introspection 写入模型和部署信息
+#   - flagos-environment-preparation 写入容器和 GPU 信息
+#   - flagos-service-startup 写入服务信息
+#   - Performance_Testing 读取服务连接信息
 
-service:
-  host: ""           # vLLM 服务地址
-  port: 8000         # vLLM 服务端口
-  endpoint: "/v1/completions"
-
+# ============================================================================
+# 模型信息 (由 model-introspection 写入)
+# ============================================================================
 model:
-  name: ""           # 模型标识名
-  path: ""           # 模型文件路径
-  tokenizer_path: "" # tokenizer 路径 (通常与 model.path 相同)
+  name: ""                # 模型标识名
+  source: ""              # 来源: modelscope|huggingface|git|local
+  readme_found: false     # 是否找到 README
+  local_path: ""          # 模型在主机上的路径
+  container_path: ""      # 模型在容器内的路径
+  tokenizer_path: ""      # tokenizer 路径 (通常与 model 路径相同)
 
-environment:
-  gpu_type: ""       # GPU 型号
-  gpu_count: 0       # GPU 数量
+# ============================================================================
+# 部署信息 (由 model-introspection 写入)
+# ============================================================================
+deployment:
+  image: ""               # Docker 镜像地址
+  docker_run: ""          # docker run 命令
+  startup_command: ""     # 服务启动命令
+  model_download: ""      # 模型下载命令
 
+# ============================================================================
+# 容器信息 (由 environment-preparation 写入)
+# ============================================================================
+container:
+  name: ""                # 容器名称
+  status: ""              # 状态: running|stopped
+
+# ============================================================================
+# 镜像信息 (由 environment-preparation 写入)
+# ============================================================================
+image:
+  name: ""                # 镜像名称
+  tag: ""                 # 镜像标签
+
+# ============================================================================
+# GPU 信息 (由 environment-preparation 写入)
+# ============================================================================
+gpu:
+  vendor: ""              # 厂商: nvidia|huawei|hygon|mthreads|kunlunxin|tianshu|metax|tsingmicro|cambricon|alibaba
+  type: ""                # GPU 型号
+  count: 0                # GPU 数量
+  visible_devices_env: "" # 指定卡的环境变量名
+
+# GPU 厂商与环境变量对照:
+#   nvidia      -> CUDA_VISIBLE_DEVICES
+#   huawei      -> ASCEND_RT_VISIBLE_DEVICES
+#   hygon       -> HIP_VISIBLE_DEVICES
+#   mthreads    -> MUSA_VISIBLE_DEVICES
+#   kunlunxin   -> XPU_VISIBLE_DEVICES
+#   tianshu     -> CUDA_VISIBLE_DEVICES
+#   metax       -> CUDA_VISIBLE_DEVICES
+#   tsingmicro  -> TXDA_VISIBLE_DEVICES
+#   cambricon   -> MLU_VISIBLE_DEVICES
+#   alibaba     -> CUDA_VISIBLE_DEVICES
+
+# GPU 检测命令对照:
+#   nvidia      -> nvidia-smi
+#   huawei      -> npu-smi info
+#   hygon       -> hy-smi
+#   mthreads    -> mthreads-gmi
+#   kunlunxin   -> xpu-smi
+#   tianshu     -> ixsmi
+#   metax       -> mx-smi
+#   tsingmicro  -> tsm_smi
+#   cambricon   -> cnmon
+
+# ============================================================================
+# 运行时信息 (由 service-startup 写入)
+# ============================================================================
+runtime:
+  framework: ""           # 框架: vllm|sglang
+  flaggems_enabled: false # 是否启用 FlagGems
+
+# ============================================================================
+# 服务信息 (由 service-startup 写入)
+# ============================================================================
+service:
+  host: ""                # 服务地址
+  port: 8000              # 服务端口
+  endpoint: "/v1/completions"
+  process_id: ""          # 服务进程 PID
+  healthy: false          # 服务是否健康
+  model_id: ""            # API 返回的模型 ID
+
+# ============================================================================
+# 元数据
+# ============================================================================
 metadata:
-  created_by: ""     # 写入此文件的 skill 名称
-  updated_at: ""     # 最后更新时间
+  created_by: ""          # 创建此文件的 skill 名称
+  updated_at: ""          # 最后更新时间
