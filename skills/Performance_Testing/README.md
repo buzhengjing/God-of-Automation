@@ -117,7 +117,7 @@ perf.py (入口)
 | 文件 | 职责 |
 |------|------|
 | `config_loader.py` | 加载 YAML 配置、校验配置有效性、合并配置 |
-| `env_detector.py` | 自动检测容器环境（GPU、vLLM 版本、模型路径等） |
+| `env_detector.py` | 运行时自动采集环境信息（GPU、vLLM 版本等）写入结果 metadata |
 | `validators.py` | 参数校验工具（IP、端口、路径等） |
 
 ### 脚本模块 (`scripts/`)
@@ -125,29 +125,11 @@ perf.py (入口)
 | 脚本 | 用途 | 使用方式 |
 |------|------|----------|
 | `run_benchmark.sh` | 一键运行完整测试 | `bash scripts/run_benchmark.sh` |
-| `detect_env.sh` | 检测当前环境信息 | `bash scripts/detect_env.sh` |
 | `generate_report.py` | 从 JSON 结果生成 Markdown 报告 | `python scripts/generate_report.py output/xxx.json` |
 
 ## 快速开始
 
-### 1. 环境检测
-
-```bash
-bash scripts/detect_env.sh
-```
-
-输出示例：
-```json
-{
-  "hostname": "gpu-server-01",
-  "gpu_name": "NVIDIA A100",
-  "gpu_count": 8,
-  "vllm_version": "0.4.0",
-  "model_paths": ["/nfs/Qwen3-4B", "/nfs/Qwen3-8B"]
-}
-```
-
-### 2. 修改配置
+### 1. 修改配置
 
 编辑 `config/perf_config.yaml`，根据环境检测结果设置：
 
@@ -155,7 +137,7 @@ bash scripts/detect_env.sh
 - `model.name` / `model.tokenizer_path`: 模型信息
 - `test_matrix`: 启用/禁用特定测试用例
 
-### 3. 运行测试
+### 2. 运行测试
 
 ```bash
 # 方式一：使用脚本
@@ -171,7 +153,7 @@ python -m src.perf --config config/perf_config.yaml --test-case 1k_input_1k_outp
 python -m src.perf --config config/perf_config.yaml --dry-run
 ```
 
-### 4. 查看结果
+### 3. 查看结果
 
 ```bash
 # 查看输出文件
@@ -248,10 +230,9 @@ python scripts/generate_report.py output/benchmark_20260305_103000.json -o repor
 
 ### Agent 工作流程
 
-1. **环境检测**: 运行 `bash scripts/detect_env.sh` 获取环境信息
-2. **配置修改**: 根据环境信息修改 `config/perf_config.yaml`
-3. **执行测试**: 运行 `python -m src.perf --config config/perf_config.yaml`
-4. **结果收集**: 从 `output/` 目录读取结果文件
+1. **配置修改**: 根据用户提供的信息修改 `config/perf_config.yaml`
+2. **执行测试**: 运行 `python -m src.perf --config config/perf_config.yaml`
+3. **结果收集**: 从 `output/` 目录读取结果文件
 
 ### 配置校验
 

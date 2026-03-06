@@ -24,13 +24,7 @@ Automated vLLM model performance benchmark testing with support for multiple inp
 
 ## Agent Workflow
 
-### Step 1: Environment Detection
-```bash
-bash scripts/detect_env.sh
-```
-Outputs: host, port, model_path, tokenizer_path, gpu_info
-
-### Step 2: Configuration
+### Step 1: Configuration
 Only modify `config/perf_config.yaml`. Validate against `config/schema.json`.
 
 Key configuration items:
@@ -38,7 +32,7 @@ Key configuration items:
 - `model.name` / `model.tokenizer_path`: Model settings
 - `test_matrix`: Enable/disable specific test cases
 
-### Step 3: Execute Tests
+### Step 2: Execute Tests
 ```bash
 python -m src.perf --config config/perf_config.yaml
 ```
@@ -48,7 +42,7 @@ Or use the convenience script:
 bash scripts/run_benchmark.sh
 ```
 
-### Step 4: Collect Results
+### Step 3: Collect Results
 Results are automatically saved to `output/` directory with timestamps.
 
 ## File Permissions
@@ -99,20 +93,15 @@ Results are automatically saved to `output/` directory with timestamps.
 
 ## Example Usage
 
-1. Detect environment:
-   ```bash
-   bash scripts/detect_env.sh > env_info.json
-   ```
-
-2. Update config based on environment:
+1. Update config:
    - Edit `config/perf_config.yaml` with correct host/port/model
 
-3. Run benchmark:
+2. Run benchmark:
    ```bash
    python -m src.perf --config config/perf_config.yaml
    ```
 
-4. View results:
+3. View results:
    ```bash
    ls output/
    cat output/benchmark_YYYYMMDD_HHMMSS.json
