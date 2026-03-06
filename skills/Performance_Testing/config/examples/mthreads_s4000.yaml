@@ -1,0 +1,47 @@
+# Moore Threads S4000 GPU Configuration Example
+# Hardware: Moore Threads S4000
+
+server:
+  host: "10.1.15.40"
+  port: 8000
+
+model:
+  name: "Qwen3-8B-mthreads"
+  tokenizer_path: "/nfs/models/Qwen3-8B"
+
+benchmark:
+  dataset_name: "random"
+  endpoint: "/v1/completions"
+  ignore_eos: true
+  trust_remote_code: true
+
+test_matrix:
+  - name: "1k_input_1k_output"
+    input_len: 1024
+    output_len: 1024
+    enabled: true
+
+  - name: "4k_input_1k_output"
+    input_len: 4096
+    output_len: 1024
+    enabled: true
+
+  - name: "16k_input_1k_output"
+    input_len: 16384
+    output_len: 1024
+    enabled: true
+
+  - name: "32k_input_1k_output"
+    input_len: 32768
+    output_len: 1024
+    enabled: true
+
+concurrency:
+  levels: [1, 2, 4, 8, 16, 32, 64, 128, 256]
+  final_num_prompts: 1000
+
+output:
+  dir: "./output"
+  format: "json"
+  include_timestamp: true
+  include_config_snapshot: true
