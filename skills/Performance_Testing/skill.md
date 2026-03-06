@@ -1,71 +1,78 @@
 ---
 name: performance-testing
-description: vLLM model performance benchmark testing tool
+description: vLLM 模型性能基准测试工具
 version: 1.0.0
 triggers:
-  - performance test
+  - 性能测试
   - benchmark
   - vllm bench
-  - throughput test
-  - TTFT test
-  - TPOT test
-  - latency test
+  - 吞吐量测试
+  - TTFT 测试
+  - TPOT 测试
+  - 延迟测试
 ---
 
-# Performance Testing Skill
+# 性能测试 Skill
 
-## Overview
-Automated vLLM model performance benchmark testing with support for multiple input/output length combinations.
+## 概述
 
-## Trigger Conditions
-- User requests model performance testing
-- User mentions benchmark, throughput, or latency testing
-- User needs to test different input/output length combinations
+自动化 vLLM 模型性能基准测试，支持多种输入/输出长度组合。
 
-## Agent Workflow
+## 触发条件
 
-### Step 1: Configuration
-Only modify `config/perf_config.yaml`. Validate against `config/schema.json`.
+- 用户请求模型性能测试
+- 用户提及 benchmark、吞吐量或延迟测试
+- 用户需要测试不同的输入/输出长度组合
 
-Key configuration items:
-- `server.host` / `server.port`: Service endpoint
-- `model.name` / `model.tokenizer_path`: Model settings
-- `test_matrix`: Enable/disable specific test cases
+## Agent 工作流程
 
-### Step 2: Execute Tests
+### 步骤 1: 配置
+
+**连接信息从 `shared/context.yaml` 读取**（由上游 skill 写入）：
+- `service.host` / `service.port`: 服务地址
+- `model.tokenizer_path`: Tokenizer 路径
+
+**测试参数在 `config/perf_config.yaml` 配置**：
+- `test_matrix`: 启用/禁用测试用例
+- `concurrency`: 并发级别
+- `output`: 输出配置
+
+### 步骤 2: 执行测试
+
 ```bash
 python -m src.perf --config config/perf_config.yaml
 ```
 
-Or use the convenience script:
+或使用便捷脚本：
 ```bash
 bash scripts/run_benchmark.sh
 ```
 
-### Step 3: Collect Results
-Results are automatically saved to `output/` directory with timestamps.
+### 步骤 3: 收集结果
 
-## File Permissions
+结果自动保存到 `output/` 目录，带有时间戳。
 
-### Modifiable (Agent CAN edit)
-- `config/perf_config.yaml` - Main configuration file
+## 文件权限
 
-### Read-Only (Agent CANNOT edit)
-- `src/*` - Source code
-- `lib/*` - Library modules
-- `scripts/*` - Executable scripts
-- `templates/*` - Template files
+### 可修改（Agent 可编辑）
+- `config/perf_config.yaml` - 主配置文件
 
-## Test Matrix (Default)
+### 只读（Agent 不可编辑）
+- `src/*` - 源代码
+- `lib/*` - 库模块
+- `scripts/*` - 可执行脚本
+- `templates/*` - 模板文件
 
-| Test Case | Input Length | Output Length |
-|-----------|--------------|---------------|
+## 测试矩阵（默认）
+
+| 测试用例 | 输入长度 | 输出长度 |
+|----------|----------|----------|
 | 1k_input_1k_output | 1024 | 1024 |
 | 4k_input_1k_output | 4096 | 1024 |
 | 16k_input_1k_output | 16384 | 1024 |
 | 32k_input_1k_output | 32768 | 1024 |
 
-## Output Format
+## 输出格式
 
 ```json
 {
@@ -83,25 +90,27 @@ Results are automatically saved to `output/` directory with timestamps.
 }
 ```
 
-## Key Metrics Collected
-- Request throughput (req/s)
-- Output token throughput (tok/s)
-- Total token throughput (tok/s)
-- Mean/Median/P99 TTFT (ms)
-- Mean/Median/P99 TPOT (ms)
-- Mean/Median/P99 ITL (ms)
+## 采集指标
 
-## Example Usage
+- 请求吞吐量 (req/s)
+- 输出 Token 吞吐量 (tok/s)
+- 总 Token 吞吐量 (tok/s)
+- 首 Token 延迟 TTFT: Mean/Median/P99 (ms)
+- Token 间延迟 TPOT: Mean/Median/P99 (ms)
+- Token 间隔延迟 ITL: Mean/Median/P99 (ms)
 
-1. Update config:
-   - Edit `config/perf_config.yaml` with correct host/port/model
+## 使用示例
 
-2. Run benchmark:
+1. 确认 `shared/context.yaml` 已包含服务连接信息
+
+2. 按需修改 `config/perf_config.yaml` 测试参数
+
+3. 运行基准测试：
    ```bash
    python -m src.perf --config config/perf_config.yaml
    ```
 
-3. View results:
+4. 查看结果：
    ```bash
    ls output/
    cat output/benchmark_YYYYMMDD_HHMMSS.json

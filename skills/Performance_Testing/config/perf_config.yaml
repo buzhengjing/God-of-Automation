@@ -1,29 +1,8 @@
 # Performance Testing Configuration
 # Version: 1.0.0
-# Agent can modify this file
-
-# =============================================================================
-# Server Configuration (detect from container environment or set manually)
-# =============================================================================
-server:
-  host: "10.1.15.35"
-  port: 9011
-
-# =============================================================================
-# Model Configuration
-# =============================================================================
-model:
-  name: "Qwen3-4B-metax-flagos"
-  tokenizer_path: "/nfs/Qwen3-4B"
-
-# =============================================================================
-# Benchmark Fixed Parameters
-# =============================================================================
-benchmark:
-  dataset_name: "random"
-  endpoint: "/v1/completions"
-  ignore_eos: true
-  trust_remote_code: true
+#
+# 注意: 服务连接信息 (host, port, model) 从 shared/context.yaml 读取
+#       此文件只配置测试参数
 
 # =============================================================================
 # Test Matrix - Input/Output Length Combinations
@@ -55,6 +34,15 @@ test_matrix:
 concurrency:
   levels: [1, 2, 4, 8, 16, 32, 64, 128, 256]
   final_num_prompts: 1000
+
+# =============================================================================
+# Benchmark Fixed Parameters
+# =============================================================================
+benchmark:
+  dataset_name: "random"
+  endpoint: "/v1/completions"
+  ignore_eos: true
+  trust_remote_code: true
 
 # =============================================================================
 # Output Configuration

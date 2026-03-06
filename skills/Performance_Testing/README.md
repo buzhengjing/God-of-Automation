@@ -1,4 +1,4 @@
-# Performance Testing Skill
+# 性能测试 Skill
 
 vLLM 模型性能基准测试工具，支持多种输入/输出长度组合的自动化测试。
 
@@ -52,26 +52,30 @@ Performance_Testing/
 
 | 文件 | 说明 |
 |------|------|
-| `perf_config.yaml` | 主配置文件，Agent 只需修改此文件即可完成测试配置 |
+| `perf_config.yaml` | 测试参数配置（连接信息从 `shared/context.yaml` 读取） |
 | `schema.json` | JSON Schema 定义，用于校验配置文件格式正确性 |
-| `examples/*.yaml` | 不同硬件平台的配置示例，可直接复制使用 |
+| `examples/*.yaml` | 不同硬件平台的配置示例 |
 
-**配置文件结构：**
+**配置架构说明：**
+
+```
+shared/context.yaml          ← 上游 skill 写入连接信息
+    │
+    ├── service.host/port    # vLLM 服务地址
+    └── model.tokenizer_path # tokenizer 路径
+          │
+          ↓
+config/perf_config.yaml      ← 本 skill 配置测试参数
+    │
+    ├── test_matrix          # 测试用例
+    ├── concurrency          # 并发级别
+    └── output               # 输出配置
+```
+
+**perf_config.yaml 结构：**
 
 ```yaml
-server:           # 服务端地址配置
-  host: "10.1.15.35"
-  port: 9011
-
-model:            # 模型配置
-  name: "Qwen3-4B-metax-flagos"
-  tokenizer_path: "/nfs/Qwen3-4B"
-
-benchmark:        # Benchmark 固定参数
-  dataset_name: "random"
-  endpoint: "/v1/completions"
-  ignore_eos: true
-  trust_remote_code: true
+# 注意: 连接信息从 shared/context.yaml 读取
 
 test_matrix:      # 测试矩阵（输入/输出长度组合）
   - name: "1k_input_1k_output"
@@ -83,6 +87,10 @@ test_matrix:      # 测试矩阵（输入/输出长度组合）
 concurrency:      # 并发配置
   levels: [1, 2, 4, 8, 16, 32, 64, 128, 256]
   final_num_prompts: 1000
+
+benchmark:        # Benchmark 固定参数
+  dataset_name: "random"
+  endpoint: "/v1/completions"
 
 output:           # 输出配置
   dir: "./output"
@@ -116,7 +124,7 @@ perf.py (入口)
 
 | 文件 | 职责 |
 |------|------|
-| `config_loader.py` | 加载 YAML 配置、校验配置有效性、合并配置 |
+| `config_loader.py` | 加载 `shared/context.yaml` + `perf_config.yaml`，合并为完整配置 |
 | `env_detector.py` | 运行时自动采集环境信息（GPU、vLLM 版本等）写入结果 metadata |
 | `validators.py` | 参数校验工具（IP、端口、路径等） |
 
@@ -129,15 +137,27 @@ perf.py (入口)
 
 ## 快速开始
 
-### 1. 修改配置
+### 1. 确认连接信息
 
-编辑 `config/perf_config.yaml`，根据环境检测结果设置：
+确保 `shared/context.yaml` 已包含正确的服务连接信息（由上游 skill 写入）：
 
-- `server.host` / `server.port`: 服务端地址
-- `model.name` / `model.tokenizer_path`: 模型信息
+```yaml
+service:
+  host: "10.1.15.35"
+  port: 8000
+
+model:
+  tokenizer_path: "/nfs/Qwen3-4B"
+```
+
+### 2. 修改测试参数（可选）
+
+编辑 `config/perf_config.yaml`：
+
 - `test_matrix`: 启用/禁用特定测试用例
+- `concurrency.levels`: 自定义并发级别
 
-### 2. 运行测试
+### 3. 运行测试
 
 ```bash
 # 方式一：使用脚本
@@ -153,7 +173,7 @@ python -m src.perf --config config/perf_config.yaml --test-case 1k_input_1k_outp
 python -m src.perf --config config/perf_config.yaml --dry-run
 ```
 
-### 3. 查看结果
+### 4. 查看结果
 
 ```bash
 # 查看输出文件
@@ -223,6 +243,7 @@ python scripts/generate_report.py output/benchmark_20260305_103000.json -o repor
 | 类型 | 路径 | Agent 权限 |
 |------|------|------------|
 | 配置文件 | `config/perf_config.yaml` | **可修改** |
+| 共享上下文 | `shared/context.yaml` | 只读（由上游写入） |
 | 源代码 | `src/*` | 只读 |
 | 工具库 | `lib/*` | 只读 |
 | 脚本 | `scripts/*` | 只读 |
@@ -230,13 +251,14 @@ python scripts/generate_report.py output/benchmark_20260305_103000.json -o repor
 
 ### Agent 工作流程
 
-1. **配置修改**: 根据用户提供的信息修改 `config/perf_config.yaml`
-2. **执行测试**: 运行 `python -m src.perf --config config/perf_config.yaml`
-3. **结果收集**: 从 `output/` 目录读取结果文件
+1. **确认连接**: 检查 `shared/context.yaml` 是否已包含服务连接信息
+2. **配置修改**: 按需修改 `config/perf_config.yaml` 测试参数
+3. **执行测试**: 运行 `python -m src.perf --config config/perf_config.yaml`
+4. **结果收集**: 从 `output/` 目录读取结果文件
 
 ### 配置校验
 
-Agent 修改配置后，系统会自动根据 `config/schema.json` 进行校验，确保：
+系统会自动根据 `config/schema.json` 校验配置，确保：
 - 必填字段完整
 - 数据类型正确
 - 数值范围合法

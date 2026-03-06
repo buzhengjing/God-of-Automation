@@ -1,0 +1,25 @@
+# Skill 间共享上下文
+# 由上游 skill 写入，下游 skill 读取
+#
+# 使用说明:
+#   - Container_Deploy skill 启动服务后写入此文件
+#   - Performance_Testing skill 读取此文件获取连接信息
+#   - 也可手动编辑此文件进行测试
+
+service:
+  host: ""           # vLLM 服务地址
+  port: 8000         # vLLM 服务端口
+  endpoint: "/v1/completions"
+
+model:
+  name: ""           # 模型标识名
+  path: ""           # 模型文件路径
+  tokenizer_path: "" # tokenizer 路径 (通常与 model.path 相同)
+
+environment:
+  gpu_type: ""       # GPU 型号
+  gpu_count: 0       # GPU 数量
+
+metadata:
+  created_by: ""     # 写入此文件的 skill 名称
+  updated_at: ""     # 最后更新时间
