@@ -2,6 +2,7 @@
 name: performance-testing
 description: vLLM 模型性能基准测试工具
 version: 1.0.0
+license: internal
 triggers:
   - 性能测试
   - benchmark
@@ -10,6 +11,11 @@ triggers:
   - TTFT 测试
   - TPOT 测试
   - 延迟测试
+depends_on:
+  - flagos-service-startup
+provides:
+  - benchmark.results
+  - benchmark.timestamp
 ---
 
 # 性能测试 Skill

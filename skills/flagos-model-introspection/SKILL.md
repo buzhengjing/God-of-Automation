@@ -1,119 +1,151 @@
 ---
 name: flagos-model-introspection
-description: Inspect a provided model repository or directory to determine model structure, framework compatibility, and available deployment instructions.
+description: 检查模型仓库或目录，确定模型结构、框架兼容性和可用的部署说明
+version: 1.0.0
 license: internal
+triggers:
+  - model introspection
+  - inspect model
+  - 模型检查
+depends_on: []
+provides:
+  - model.name
+  - model.source
+  - model.path
+  - model.readme_found
+  - runtime.framework
 ---
 
-# FLAGOS MODEL INTROSPECTION SKILL
+# 模型检查 Skill
 
-This skill analyzes a model source before deployment.
+此 Skill 在部署前分析模型来源。
 
-Supported sources include:
+支持的来源包括：
 
-- ModelScope repositories
-- HuggingFace repositories
-- Git repositories
-- Local model directories
-- User provided URLs
+- ModelScope 仓库
+- HuggingFace 仓库
+- Git 仓库
+- 本地模型目录
+- 用户提供的 URL
 
-The goal is to understand the model structure and deployment requirements before environment preparation.
-
----
-
-# WORKFLOW
-
-## STEP 1 — Identify Model Source
-
-The user should provide one of the following:
-
-- model repository URL
-- local model directory
-- model download command
-
-Determine:
-
-- source platform
-- repository location
-- model name
-
-Result feedback:
-
-- model name
-- repository source
-- repository URL
+目标是在环境准备前了解模型结构和部署要求。
 
 ---
 
-## STEP 2 — Locate README or Deployment Guide
+# 上下文集成
 
-Search for:
+## 从 shared/context.yaml 读取
 
-README.md  
-deployment documentation  
-usage instructions
+无（通常是流程中的第一个 Skill）
 
-If a README exists, extract:
+## 写入 shared/context.yaml
 
-- model download command
-- docker image source
-- docker run command
-- inference startup command
-
-Result feedback:
-
-- README detected or not
-- available deployment instructions
+```yaml
+model:
+  name: <检测到的模型名称>
+  source: <modelscope|huggingface|git|local>
+  path: <仓库 URL 或本地路径>
+  readme_found: <true|false>
+runtime:
+  framework: <vllm|sglang|transformers|tgi>
+```
 
 ---
 
-## STEP 3 — Inspect Model Directory
+# 工作流程
 
-Check for key files such as:
+## 步骤 1 — 识别模型来源
 
-config.json  
-tokenizer.json  
-model.safetensors  
+用户应提供以下之一：
+
+- 模型仓库 URL
+- 本地模型目录
+- 模型下载命令
+
+确定：
+
+- 来源平台
+- 仓库位置
+- 模型名称
+
+结果反馈：
+
+- 模型名称
+- 仓库来源
+- 仓库 URL
+
+---
+
+## 步骤 2 — 查找 README 或部署指南
+
+搜索：
+
+README.md
+部署文档
+使用说明
+
+如果存在 README，提取：
+
+- 模型下载命令
+- Docker 镜像来源
+- Docker run 命令
+- 推理启动命令
+
+结果反馈：
+
+- 是否检测到 README
+- 可用的部署说明
+
+---
+
+## 步骤 3 — 检查模型目录
+
+检查关键文件如：
+
+config.json
+tokenizer.json
+model.safetensors
 pytorch_model.bin
 
-Determine model format.
+确定模型格式。
 
-Result feedback:
+结果反馈：
 
-- model file structure
-- weight format
+- 模型文件结构
+- 权重格式
 
 ---
 
-## STEP 4 — Detect Supported Runtime
+## 步骤 4 — 检测支持的运行时
 
-Determine compatible frameworks.
+确定兼容的框架。
 
-Typical frameworks:
+典型框架：
 
 - vLLM
 - SGLang
 - Transformers
 - TGI
 
-Heuristics:
+判断依据：
 
-- presence of vllm instructions
-- presence of sglang instructions
-- tokenizer configuration
+- 是否存在 vLLM 说明
+- 是否存在 SGLang 说明
+- Tokenizer 配置
 
-Result feedback:
+结果反馈：
 
-- recommended runtime framework
-- alternative runtime options
+- 推荐的运行时框架
+- 备选运行时选项
 
 ---
 
-# COMPLETION CRITERIA
+# 完成条件
 
-Model introspection is complete when:
+模型检查完成的标志：
 
-- model source identified
-- README status known
-- runtime framework determined
+- 模型来源已识别
+- README 状态已知
+- 运行时框架已确定
 
-The next step should be **flagos-environment-preparation**.
+下一步应执行 **flagos-environment-preparation**。
