@@ -8,7 +8,7 @@ triggers:
   - prepare environment
   - 环境准备
 depends_on:
-  - flagos-model-introspection
+  - flagos-model-discovery
 provides:
   - container.name
   - container.status
