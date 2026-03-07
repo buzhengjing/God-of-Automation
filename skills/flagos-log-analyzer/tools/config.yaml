@@ -1,0 +1,39 @@
+# FlagOS Log Analyzer Configuration
+
+analysis:
+  max_lines: 10000
+
+log_locations:
+  - service.log
+  - vllm.log
+  - sglang.log
+  - nohup.out
+  - /var/log/inference.log
+
+error_patterns:
+  cuda_oom:
+    severity: critical
+    keywords:
+      - "CUDA out of memory"
+      - "OOM"
+      - "OutOfMemoryError"
+  cuda_driver:
+    severity: critical
+    keywords:
+      - "driver mismatch"
+      - "CUDA driver version"
+  model_not_found:
+    severity: critical
+    keywords:
+      - "model.*not found"
+      - "FileNotFoundError"
+
+flaggems_patterns:
+  - "flag_gems"
+  - "flaggems"
+  - "GEMS MUL"
+  - "GEMS RECIPROCAL"
+
+output:
+  format: json
+  file: diagnosis.json

@@ -1,59 +1,83 @@
 ---
 name: flagos-service-health-check
-description: Verify that the deployed inference service is accessible and responding correctly.
-license: internal
+description: 验证已部署的推理服务是否可访问并正确响应
+version: 1.0.0
+triggers:
+  - 服务验证
+  - 健康检查
+  - health check
+  - service validation
+dependencies:
+  - flagos-service-startup-environment-check
+next_skill: flagos-eval-correctness
 ---
 
-# FLAGOS SERVICE HEALTH CHECK
+# FlagOS 服务健康检查 Skill
 
-This skill validates that the inference service is running correctly.
+验证推理服务是否正常运行。
 
 ---
 
-# WORKFLOW
+## 工作流程
 
-## STEP 1 — Check Process
+### 步骤 1：检查进程
 
+```bash
 ps -ef | grep vllm
+```
 
-Result feedback:
+**结果反馈**：
 
-- process id
-- process status
+- 进程 ID
+- 进程状态
 
 ---
 
-## STEP 2 — Query Model API
+### 步骤 2：查询模型 API
 
+```bash
 curl http://localhost:8000/v1/models
+```
 
-Result feedback:
+**结果反馈**：
 
-- API response
-- model identifier
+- API 响应
+- 模型标识符
 
 ---
 
-## STEP 3 — Run Inference Test
+### 步骤 3：运行推理测试
 
+```bash
 curl http://localhost:8000/v1/chat/completions \
--H "Content-Type: application/json" \
--d '{
-"model":"<model_name>",
-"messages":[{"role":"user","content":"hello"}]
-}'
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "<model_name>",
+    "messages": [{"role": "user", "content": "hello"}]
+  }'
+```
 
-Result feedback:
+**结果反馈**：
 
-- inference result
-- latency
+- 推理结果
+- 延迟
 
 ---
 
-# COMPLETION CRITERIA
+## 完成标准
 
-Service is considered healthy when:
+服务被认为健康的条件：
 
-- API reachable
-- model listed
-- inference result returned
+- API 可达
+- 模型已列出
+- 返回了推理结果
+
+---
+
+## 工具脚本
+
+可使用 `tools/check_health.sh` 进行自动化检查。
+
+```bash
+bash tools/check_health.sh --host localhost --port 8000 --model <model_name>
+```

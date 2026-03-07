@@ -1,0 +1,19 @@
+# FlagOS Service Health Check Configuration
+
+server:
+  host: localhost
+  port: 8000
+  timeout: 30
+
+checks:
+  process_check: true
+  api_check: true
+  inference_check: true
+
+inference_test:
+  prompt: "Say hello in one word."
+  max_tokens: 10
+
+output:
+  format: json  # json or text
+  file: health_check_result.json

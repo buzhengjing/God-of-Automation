@@ -1,0 +1,30 @@
+# FlagOS Image Package Upload Configuration
+
+harbor:
+  registry: "harbor.baai.ac.cn"
+  project: "flagrelease-public"
+  prefix: "flagrelease"
+
+image_naming:
+  template: "{prefix}-{vendor}-release-model_{model}-tree_{tree}-gems_{gems}-scale_{scale}-cx_{cx}-python_{python}-torch_{torch}-pcp_{cuda}-gpu_{gpu}-arc_{arch}-driver_{driver}"
+  tag_format: "YYMMDDHHMM"
+
+version_replacements:
+  - from: "+"
+    to: "-"
+
+required_fields:
+  - vendor
+  - model_name
+  - tree_version
+  - gems_version
+  - python_version
+  - torch_version
+  - cuda_version
+  - gpu_type
+  - architecture
+  - driver_version
+
+optional_fields:
+  - scale_version
+  - cx_version

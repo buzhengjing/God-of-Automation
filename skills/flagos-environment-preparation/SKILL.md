@@ -1,152 +1,177 @@
 ---
 name: flagos-environment-preparation
-description: Prepare the FlagOS inference environment including model download, Docker image preparation, and container creation.
-license: internal
+description: 准备 FlagOS 推理环境，包括模型下载、Docker 镜像准备和容器创建
+version: 1.0.0
+triggers:
+  - 环境准备
+  - 下载模型
+  - 拉取镜像
+  - 启动容器
+  - environment preparation
+dependencies:
+  - flagos-model-introspection
+next_skill: flagos-service-startup-environment-check
 ---
 
-# FLAGOS ENVIRONMENT PREPARATION SKILL
+# FlagOS 环境准备 Skill
 
-This skill prepares the runtime environment required for model deployment.
-
-It does not start inference services.
-
----
-
-# DEPLOYMENT PRIORITY
-
-Always follow this order:
-
-1 README instructions  
-2 Official repository instructions  
-3 User provided instructions  
-4 Manual deployment
+准备模型部署所需的运行时环境，不启动推理服务。
 
 ---
 
-# WORKFLOW
+## 部署优先级
 
-## STEP 1 — Confirm Deployment Instructions
+始终按此顺序：
 
-Check whether the previous step discovered a README.
-
-If README exists:
-
-Use the commands provided.
-
-If README does not exist:
-
-Request from the user:
-
-- model download method
-- docker image source
-- container configuration
-
-Result feedback:
-
-- deployment method
-- docker image source
-- model path
+1. README 说明
+2. 官方仓库说明
+3. 用户提供的说明
+4. 手动部署
 
 ---
 
-## STEP 2 — Verify Host Environment
+## 工作流程
 
-Check GPU:
+### 步骤 1：确认部署说明
 
+检查上一步是否发现了 README。
+
+**如果 README 存在**：
+
+使用提供的命令。
+
+**如果 README 不存在**：
+
+向用户请求：
+
+- 模型下载方式
+- Docker 镜像来源
+- 容器配置
+
+**结果反馈**：
+
+- 部署方式
+- Docker 镜像来源
+- 模型路径
+
+---
+
+### 步骤 2：验证主机环境
+
+**检查 GPU**：
+
+```bash
 nvidia-smi
+```
 
-Check Docker:
+**检查 Docker**：
 
+```bash
 docker --version
+```
 
-Check ModelScope:
+**检查 ModelScope**：
 
+```bash
 modelscope --version
+```
 
-Install if missing:
+如果缺失则安装：
 
+```bash
 pip install modelscope
+```
 
-Result feedback:
+**结果反馈**：
 
-- GPU status
-- Docker version
-- ModelScope status
+- GPU 状态
+- Docker 版本
+- ModelScope 状态
 
 ---
 
-## STEP 3 — Download Model
+### 步骤 3：下载模型
 
-Preferred method:
+**首选方式**：
 
-Use README download command.
+使用 README 下载命令。
 
-Otherwise use ModelScope or user provided URL.
+否则使用 ModelScope 或用户提供的 URL。
 
-Example:
+**示例**：
 
+```bash
 modelscope download \
---model <model_repo> \
---local_dir <model_directory>
+  --model <model_repo> \
+  --local_dir <model_directory>
+```
 
-Verify files exist.
+验证文件是否存在。
 
-Result feedback:
+**结果反馈**：
 
-- model path
-- download status
+- 模型路径
+- 下载状态
 
 ---
 
-## STEP 4 — Pull Docker Image
+### 步骤 4：拉取 Docker 镜像
 
-If README specifies an image:
+**如果 README 指定了镜像**：
 
+```bash
 docker pull <image>
+```
 
-Otherwise use the user provided image.
+否则使用用户提供的镜像。
 
-Verify image:
+**验证镜像**：
 
+```bash
 docker images
+```
 
-Result feedback:
+**结果反馈**：
 
-- image name
-- image tag
+- 镜像名称
+- 镜像标签
 
 ---
 
-## STEP 5 — Create Container
+### 步骤 5：创建容器
 
-If README provides docker run command:
+**如果 README 提供了 docker run 命令**：
 
-Use that command.
+使用该命令。
 
-Otherwise construct a container launch:
+**否则构建容器启动命令**：
 
+```bash
 docker run -it --gpus all \
---name <container_name> \
---shm-size 32g \
--v <host_model_path>:<container_model_path> \
-<image> \
-/bin/bash
+  --name <container_name> \
+  --shm-size 32g \
+  -v <host_model_path>:<container_model_path> \
+  <image> \
+  /bin/bash
+```
 
-Verify container:
+**验证容器**：
 
+```bash
 docker ps
+```
 
-Result feedback:
+**结果反馈**：
 
-- container name
-- container status
+- 容器名称
+- 容器状态
 
 ---
 
-# COMPLETION CRITERIA
+## 完成标准
 
-Environment preparation is successful when:
+环境准备成功的条件：
 
-- model downloaded
-- docker image pulled
-- container running
+- 模型已下载
+- Docker 镜像已拉取
+- 容器正在运行

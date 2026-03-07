@@ -1,0 +1,26 @@
+# FlagOS Correctness Evaluation Configuration
+
+model:
+  name: ""                           # Model name/ID (required)
+  api_base: "http://localhost:8000/v1"  # OpenAI-compatible API endpoint
+  api_key: "EMPTY"                   # API key (optional)
+
+inference:
+  temperature: 0                     # Inference temperature
+  max_tokens: 2048                   # Maximum tokens per request
+  timeout: 120                       # Request timeout in seconds
+  max_retries: 3                     # Max retry attempts
+
+evaluation:
+  aime_samples: 30                   # Max AIME samples to evaluate
+  erqa_samples: 400                  # Max ERQA samples to evaluate
+
+datasets:
+  aime_path: "datasets/AIME"         # AIME dataset path
+  erqa_path: "datasets/ERQA"         # ERQA dataset path
+
+output:
+  aime_result: "aime_result.json"
+  erqa_result: "erqa_result.json"
+  aime_log: "eval_aime_progress.log"
+  erqa_log: "eval_erqa_progress.log"

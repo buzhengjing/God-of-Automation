@@ -1,0 +1,26 @@
+# FlagOS Model Release Configuration
+
+huggingface:
+  enabled: true
+  username: ""
+  organization: ""
+  private: false
+
+modelscope:
+  enabled: true
+  namespace: ""
+  private: false
+
+model:
+  name: ""
+  base_model: ""
+  license: "Apache-2.0"
+
+readme:
+  template: "templates/readme_template.md"
+  include_performance: true
+  include_docker_instructions: true
+
+upload:
+  retry_count: 3
+  timeout: 3600
