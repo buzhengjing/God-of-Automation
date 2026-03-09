@@ -1,8 +1,18 @@
 # Performance Testing Configuration
-# Version: 1.0.0
+# Version: 2.0.0
 #
-# 注意: 服务连接信息 (host, port, model) 从 shared/context.yaml 读取
-#       此文件只配置测试参数
+# 此文件包含完整的测试配置，可独立在容器内运行
+
+# =============================================================================
+# 服务连接信息 (由上游 skill 填充，同步自 shared/context.yaml)
+# =============================================================================
+server:
+  host: ""                # 服务地址 (如 localhost 或容器内 127.0.0.1)
+  port: 8000              # 服务端口
+
+model:
+  name: ""                # 模型名称/路径
+  tokenizer_path: ""      # tokenizer 路径
 
 # =============================================================================
 # Test Matrix - Input/Output Length Combinations

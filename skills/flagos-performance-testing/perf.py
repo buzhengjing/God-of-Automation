@@ -24,7 +24,6 @@ import yaml
 # 配置加载
 # =============================================================================
 
-DEFAULT_CONTEXT_PATH = Path(__file__).parent.parent.parent / "shared" / "context.yaml"
 DEFAULT_CONFIG_PATH = Path(__file__).parent / "config" / "perf_config.yaml"
 
 
@@ -36,30 +35,20 @@ def load_yaml(path: Path) -> Dict[str, Any]:
         return yaml.safe_load(f) or {}
 
 
-def load_config(config_path: Optional[str] = None, context_path: Optional[str] = None) -> Dict[str, Any]:
+def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     """
-    加载完整配置：合并 context.yaml + perf_config.yaml
+    加载配置文件 (perf_config.yaml 包含所有必要信息)
     """
-    # 加载 context（连接信息）
-    ctx_path = Path(context_path) if context_path else DEFAULT_CONTEXT_PATH
-    context = load_yaml(ctx_path)
-
-    # 加载测试配置
     cfg_path = Path(config_path) if config_path else DEFAULT_CONFIG_PATH
-    perf_config = load_yaml(cfg_path)
+    config = load_yaml(cfg_path)
 
-    # 合并配置
-    return {
-        "server": {
-            "host": context.get("service", {}).get("host", ""),
-            "port": context.get("service", {}).get("port", 8000),
-        },
-        "model": {
-            "name": context.get("model", {}).get("name", ""),
-            "tokenizer_path": context.get("model", {}).get("tokenizer_path", ""),
-        },
-        **perf_config,
-    }
+    # 确保 server 和 model 字段存在
+    if "server" not in config:
+        config["server"] = {"host": "", "port": 8000}
+    if "model" not in config:
+        config["model"] = {"name": "", "tokenizer_path": ""}
+
+    return config
 
 
 def validate_config(config: Dict[str, Any]) -> bool:
@@ -235,14 +224,13 @@ def save_results(results: Dict[str, Any], config: Dict[str, Any]) -> str:
 def main():
     parser = argparse.ArgumentParser(description="vLLM 性能基准测试")
     parser.add_argument("--config", help="配置文件路径")
-    parser.add_argument("--context", help="context.yaml 路径")
     parser.add_argument("--test-case", help="运行指定测试用例")
     parser.add_argument("--dry-run", action="store_true", help="仅打印命令")
     args = parser.parse_args()
 
     # 加载配置
     print("加载配置...")
-    config = load_config(args.config, args.context)
+    config = load_config(args.config)
 
     if not validate_config(config):
         sys.exit(1)
