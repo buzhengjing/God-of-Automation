@@ -23,5 +23,5 @@ Skill 间信息共享目录。
 ## 数据流
 
 ```
-Container_Deploy  ──写入──>  context.yaml  ──读取──>  Performance_Testing
+Container_Deploy  ──写入──>  context.yaml  ──读取──>  flagos-performance-testing
 ```

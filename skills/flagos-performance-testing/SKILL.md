@@ -22,7 +22,7 @@ depends_on:
 ## 文件结构
 
 ```
-Performance_Testing/
+flagos-performance-testing/
 ├── SKILL.md              # 本文件
 ├── perf.py               # 测试入口（只读）
 ├── config/

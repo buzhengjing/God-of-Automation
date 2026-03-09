@@ -5,7 +5,7 @@
 #   - flagos-model-introspection 写入模型和部署信息
 #   - flagos-environment-preparation 写入容器和 GPU 信息
 #   - flagos-service-startup 写入服务信息
-#   - Performance_Testing 读取服务连接信息
+#   - flagos-performance-testing 读取服务连接信息
 
 # ============================================================================
 # 模型信息 (由 model-introspection 写入)

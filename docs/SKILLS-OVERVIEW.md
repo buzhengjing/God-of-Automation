@@ -1,4 +1,4 @@
-# God-of-Automation Skills 概览
+# Skills 概览
 
 本文档整理了 FlagOS GPU 性能测试自动化框架中所有 Skill 的功能说明和执行顺序。
 
@@ -12,7 +12,7 @@
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
 │   ①                    ②                       ③                    ④      │
-│   model-introspection → environment-preparation → service-startup → Performance_Testing
+│   model-introspection → environment-preparation → service-startup → flagos-performance-testing
 │   (模型检查)            (环境准备)               (服务启动)          (性能测试)  │
 │                                                       │                     │
 │                                                       ↓                     │
@@ -129,7 +129,7 @@ runtime.gpu_count, runtime.flaggems_enabled
 
 ---
 
-### ④ Performance_Testing (性能测试)
+### ④ flagos-performance-testing (性能测试)
 
 | 属性 | 说明 |
 |------|------|
@@ -230,7 +230,7 @@ diagnosis.status, diagnosis.errors, diagnosis.suggestions
 | 1 | model-introspection | 用户提供模型来源 |
 | 2 | environment-preparation | model-introspection 完成 |
 | 3 | service-startup | environment-preparation 完成 |
-| 4 | Performance_Testing | service-startup 完成且服务健康 |
+| 4 | flagos-performance-testing | service-startup 完成且服务健康 |
 | 5 | flagos-release | service-startup 完成 (可选) |
 | - | flagos-log-analyzer | 任何阶段出现问题时调用 |
 
@@ -258,7 +258,7 @@ diagnosis.status, diagnosis.errors, diagnosis.suggestions
          │
          ↓ 读取
 ┌──────────────────┐    ┌──────────────┐
-│ Performance_Testing │    │ flagos-release │
+│ flagos-performance-testing │    │ flagos-release │
 └──────────────────┘    └──────────────┘
 ```
 
