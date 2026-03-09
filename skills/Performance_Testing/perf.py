@@ -1,105 +1,279 @@
-import subprocess
-import re
+#!/usr/bin/env python3
+"""
+vLLM 性能基准测试工具
+
+Usage:
+    python perf.py                           # 使用默认配置
+    python perf.py --config config.yaml      # 指定配置文件
+    python perf.py --test-case 1k_input_1k_output  # 运行单个测试用例
+    python perf.py --dry-run                 # 仅打印命令不执行
+"""
+
+import argparse
 import json
+import re
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-# 基础命令模板（不含 --max-concurrency 和 --num-prompts）
-base_cmd = [
-    "vllm", "bench", "serve",
-    "--host", "10.1.15.35",
-    "--port", "9011",
-    "--model", "Qwen3-4B-metax-flagos",
-    "--tokenizer", "/nfs/Qwen3-4B",
-    "--dataset-name", "random",
-    "--random-input-len", "1",
-    "--random-output-len", "512",
-    "--endpoint", "/v1/completions",
-    "--ignore-eos",
-    "--trust-remote-code"
-]
+import yaml
 
-def parse_benchmark_output(output: str):
-    """从 benchmark 输出中提取关键指标"""
-    metrics = {}
+# =============================================================================
+# 配置加载
+# =============================================================================
 
-    # 使用正则匹配关键行（value 用 raw string，key 用自然名称）
-    patterns = {
-        'Successful requests': r'Successful requests:\s+(\d+)',
-        'Failed requests': r'Failed requests:\s+(\d+)',
-        'Benchmark duration (s)': r'Benchmark duration \(s\):\s+([\d.]+)',
-        'Total input tokens': r'Total input tokens:\s+(\d+)',
-        'Total generated tokens': r'Total generated tokens:\s+(\d+)',
-        'Request throughput (req/s)': r'Request throughput \(req/s\):\s+([\d.]+)',
-        'Output token throughput (tok/s)': r'Output token throughput \(tok/s\):\s+([\d.]+)',
-        'Peak output token throughput (tok/s)': r'Peak output token throughput \(tok/s\):\s+([\d.]+)',
-        'Peak concurrent requests': r'Peak concurrent requests:\s+([\d.]+)',
-        'Total Token throughput (tok/s)': r'Total Token throughput \(tok/s\):\s+([\d.]+)',
-        'Mean TTFT (ms)': r'Mean TTFT \(ms\):\s+([\d.]+)',
-        'Median TTFT (ms)': r'Median TTFT \(ms\):\s+([\d.]+)',
-        'P99 TTFT (ms)': r'P99 TTFT \(ms\):\s+([\d.]+)',
-        'Mean TPOT (ms)': r'Mean TPOT \(ms\):\s+([\d.]+)',
-        'Median TPOT (ms)': r'Median TPOT \(ms\):\s+([\d.]+)',
-        'P99 TPOT (ms)': r'P99 TPOT \(ms\):\s+([\d.]+)',
-        'Mean ITL (ms)': r'Mean ITL \(ms\):\s+([\d.]+)',
-        'Median ITL (ms)': r'Median ITL \(ms\):\s+([\d.]+)',
-        'P99 ITL (ms)': r'P99 ITL \(ms\):\s+([\d.]+)',
+DEFAULT_CONTEXT_PATH = Path(__file__).parent.parent.parent / "shared" / "context.yaml"
+DEFAULT_CONFIG_PATH = Path(__file__).parent / "config" / "perf_config.yaml"
+
+
+def load_yaml(path: Path) -> Dict[str, Any]:
+    """加载 YAML 文件"""
+    if not path.exists():
+        raise FileNotFoundError(f"文件不存在: {path}")
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def load_config(config_path: Optional[str] = None, context_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    加载完整配置：合并 context.yaml + perf_config.yaml
+    """
+    # 加载 context（连接信息）
+    ctx_path = Path(context_path) if context_path else DEFAULT_CONTEXT_PATH
+    context = load_yaml(ctx_path)
+
+    # 加载测试配置
+    cfg_path = Path(config_path) if config_path else DEFAULT_CONFIG_PATH
+    perf_config = load_yaml(cfg_path)
+
+    # 合并配置
+    return {
+        "server": {
+            "host": context.get("service", {}).get("host", ""),
+            "port": context.get("service", {}).get("port", 8000),
+        },
+        "model": {
+            "name": context.get("model", {}).get("name", ""),
+            "tokenizer_path": context.get("model", {}).get("tokenizer_path", ""),
+        },
+        **perf_config,
     }
 
-    for key, pattern in patterns.items():
+
+def validate_config(config: Dict[str, Any]) -> bool:
+    """验证配置完整性"""
+    errors = []
+
+    if not config.get("server", {}).get("host"):
+        errors.append("server.host 未配置 (检查 shared/context.yaml)")
+    if not config.get("model", {}).get("tokenizer_path"):
+        errors.append("model.tokenizer_path 未配置 (检查 shared/context.yaml)")
+    if not config.get("test_matrix"):
+        errors.append("test_matrix 为空")
+    if not config.get("concurrency", {}).get("levels"):
+        errors.append("concurrency.levels 未配置")
+
+    for err in errors:
+        print(f"ERROR: {err}")
+
+    return len(errors) == 0
+
+
+# =============================================================================
+# 输出解析
+# =============================================================================
+
+METRIC_PATTERNS = {
+    'Successful requests': r'Successful requests:\s+(\d+)',
+    'Failed requests': r'Failed requests:\s+(\d+)',
+    'Benchmark duration (s)': r'Benchmark duration \(s\):\s+([\d.]+)',
+    'Total input tokens': r'Total input tokens:\s+(\d+)',
+    'Total generated tokens': r'Total generated tokens:\s+(\d+)',
+    'Request throughput (req/s)': r'Request throughput \(req/s\):\s+([\d.]+)',
+    'Output token throughput (tok/s)': r'Output token throughput \(tok/s\):\s+([\d.]+)',
+    'Total Token throughput (tok/s)': r'Total Token throughput \(tok/s\):\s+([\d.]+)',
+    'Mean TTFT (ms)': r'Mean TTFT \(ms\):\s+([\d.]+)',
+    'Median TTFT (ms)': r'Median TTFT \(ms\):\s+([\d.]+)',
+    'P99 TTFT (ms)': r'P99 TTFT \(ms\):\s+([\d.]+)',
+    'Mean TPOT (ms)': r'Mean TPOT \(ms\):\s+([\d.]+)',
+    'Median TPOT (ms)': r'Median TPOT \(ms\):\s+([\d.]+)',
+    'P99 TPOT (ms)': r'P99 TPOT \(ms\):\s+([\d.]+)',
+    'Mean ITL (ms)': r'Mean ITL \(ms\):\s+([\d.]+)',
+    'Median ITL (ms)': r'Median ITL \(ms\):\s+([\d.]+)',
+    'P99 ITL (ms)': r'P99 ITL \(ms\):\s+([\d.]+)',
+}
+
+
+def parse_output(output: str) -> Dict[str, Any]:
+    """从 vllm bench 输出中提取指标"""
+    metrics = {}
+    for key, pattern in METRIC_PATTERNS.items():
         match = re.search(pattern, output)
         if match:
-            value_str = match.group(1)
-            # 自动判断是整数还是浮点数
-            if '.' in value_str:
-                metrics[key] = float(value_str)
-            else:
-                metrics[key] = int(value_str)
+            val = match.group(1)
+            metrics[key] = float(val) if '.' in val else int(val)
         else:
-            metrics[key] = None  # 未匹配到设为 None
-
+            metrics[key] = None
     return metrics
 
-# 总结果字典
-all_results = {}
 
-# Step 1: concurrency = 1, 2, 4, ..., 256
-concurrency = 1
-while concurrency <= 256:
-    num_prompts = concurrency
-    cmd = base_cmd + ["--num-prompts", str(num_prompts), "--max-concurrency", str(concurrency)]
+# =============================================================================
+# 基准测试执行
+# =============================================================================
 
-    print(f"Running with concurrency={concurrency}, num_prompts={num_prompts}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+def build_command(config: Dict[str, Any], test_case: Dict[str, Any]) -> List[str]:
+    """构建 vllm bench 命令"""
+    server = config["server"]
+    model = config["model"]
+    bench = config.get("benchmark", {})
 
-    if result.returncode != 0:
-        print(f"⚠️ Command failed for concurrency={concurrency}")
-        print("STDERR:", result.stderr)
-        all_results[concurrency] = {"error": result.stderr}
+    cmd = [
+        "vllm", "bench", "serve",
+        "--host", server["host"],
+        "--port", str(server["port"]),
+        "--model", model["name"],
+        "--tokenizer", model["tokenizer_path"],
+        "--dataset-name", bench.get("dataset_name", "random"),
+        "--random-input-len", str(test_case["input_len"]),
+        "--random-output-len", str(test_case["output_len"]),
+        "--endpoint", bench.get("endpoint", "/v1/completions"),
+    ]
+
+    if bench.get("ignore_eos", True):
+        cmd.append("--ignore-eos")
+    if bench.get("trust_remote_code", True):
+        cmd.append("--trust-remote-code")
+
+    return cmd
+
+
+def run_benchmark(cmd: List[str], num_prompts: int, max_concurrency: Optional[int] = None,
+                  dry_run: bool = False) -> Dict[str, Any]:
+    """执行单次基准测试"""
+    full_cmd = cmd + ["--num-prompts", str(num_prompts)]
+    if max_concurrency:
+        full_cmd += ["--max-concurrency", str(max_concurrency)]
+
+    if dry_run:
+        print(f"  [DRY RUN] {' '.join(full_cmd)}")
+        return {"dry_run": True}
+
+    conc_str = f"concurrency={max_concurrency}" if max_concurrency else "unlimited"
+    print(f"  Running: num_prompts={num_prompts}, {conc_str}")
+
+    try:
+        result = subprocess.run(full_cmd, capture_output=True, text=True, timeout=600)
+        if result.returncode != 0:
+            print(f"    FAILED: {result.stderr[:200]}")
+            return {"error": result.stderr}
+
+        metrics = parse_output(result.stdout)
+        throughput = metrics.get('Output token throughput (tok/s)', 'N/A')
+        print(f"    OK - {throughput} tok/s")
+        return metrics
+
+    except subprocess.TimeoutExpired:
+        print("    TIMEOUT")
+        return {"error": "timeout"}
+    except Exception as e:
+        print(f"    ERROR: {e}")
+        return {"error": str(e)}
+
+
+def run_test_case(config: Dict[str, Any], test_case: Dict[str, Any], dry_run: bool = False) -> Dict[str, Any]:
+    """运行单个测试用例的所有并发级别"""
+    base_cmd = build_command(config, test_case)
+    results = {}
+
+    levels = config["concurrency"]["levels"]
+    final_prompts = config["concurrency"]["final_num_prompts"]
+
+    # 逐级并发测试
+    for conc in levels:
+        results[f"concurrency_{conc}"] = run_benchmark(base_cmd, conc, conc, dry_run)
+
+    # 最终无限制并发测试
+    print(f"  Running: num_prompts={final_prompts}, unlimited")
+    results["max"] = run_benchmark(base_cmd, final_prompts, None, dry_run)
+
+    return results
+
+
+# =============================================================================
+# 结果保存
+# =============================================================================
+
+def save_results(results: Dict[str, Any], config: Dict[str, Any]) -> str:
+    """保存测试结果到 JSON 文件"""
+    output_cfg = config.get("output", {})
+    output_dir = Path(output_cfg.get("dir", "./output"))
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filepath = output_dir / f"benchmark_{timestamp}.json"
+
+    data = {
+        "metadata": {
+            "timestamp": datetime.now().isoformat(),
+            "config": config if output_cfg.get("include_config_snapshot", True) else None,
+        },
+        "results": results,
+    }
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+    return str(filepath)
+
+
+# =============================================================================
+# 主入口
+# =============================================================================
+
+def main():
+    parser = argparse.ArgumentParser(description="vLLM 性能基准测试")
+    parser.add_argument("--config", help="配置文件路径")
+    parser.add_argument("--context", help="context.yaml 路径")
+    parser.add_argument("--test-case", help="运行指定测试用例")
+    parser.add_argument("--dry-run", action="store_true", help="仅打印命令")
+    args = parser.parse_args()
+
+    # 加载配置
+    print("加载配置...")
+    config = load_config(args.config, args.context)
+
+    if not validate_config(config):
+        sys.exit(1)
+
+    # 筛选测试用例
+    test_matrix = config["test_matrix"]
+    if args.test_case:
+        test_matrix = [tc for tc in test_matrix if tc["name"] == args.test_case]
+        if not test_matrix:
+            print(f"ERROR: 测试用例 '{args.test_case}' 不存在")
+            sys.exit(1)
     else:
-        metrics = parse_benchmark_output(result.stdout)
-        all_results[concurrency] = metrics
-        print(f"✅ Completed concurrency={concurrency}:\n {metrics}\n\n")
+        test_matrix = [tc for tc in test_matrix if tc.get("enabled", True)]
 
-    concurrency *= 2
+    print(f"将运行 {len(test_matrix)} 个测试用例")
 
-# Step 2: 最后跑一次无 --max-concurrency，num_prompts=1000
-print("Running final test without --max-concurrency, num_prompts=1000")
-cmd_final = base_cmd + ["--num-prompts", "1000"]
-result = subprocess.run(cmd_final, capture_output=True, text=True)
+    # 执行测试
+    all_results = {}
+    for tc in test_matrix:
+        print(f"\n{'='*50}")
+        print(f"测试用例: {tc['name']} (input={tc['input_len']}, output={tc['output_len']})")
+        print('='*50)
+        all_results[tc["name"]] = run_test_case(config, tc, args.dry_run)
 
-if result.returncode != 0:
-    print("⚠️ Final command failed")
-    print("STDERR:", result.stderr)
-    all_results['max'] = {"error": result.stderr}
-else:
-    metrics = parse_benchmark_output(result.stdout)
-    all_results['max'] = metrics
-    print("✅ Final test completed")
+    # 保存结果
+    if not args.dry_run:
+        output_path = save_results(all_results, config)
+        print(f"\n结果已保存: {output_path}")
 
-# 打印汇总结果
-print("\n=== ALL BENCHMARK RESULTS ===")
-print(json.dumps(all_results, indent=2, ensure_ascii=False))
+    return all_results
 
-# 可选：保存到文件
-with open("benchmark_results.json", "w") as f:
-    json.dump(all_results, f, indent=2, ensure_ascii=False)
-print("\nResults saved to benchmark_results.json")
+
+if __name__ == "__main__":
+    main()
