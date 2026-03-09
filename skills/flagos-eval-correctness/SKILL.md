@@ -104,69 +104,72 @@ ERQA 具身推理评测脚本。
 
 ## 评测流程
 
-### 步骤 1：准备环境
+使用 `shared/context.yaml` 中的统一工作目录 `workspace.eval_dir`：
 
 ```bash
-cd tools
-
-# 确保虚拟环境存在
-if [ ! -d ".venv" ]; then
-    uv venv
-    source .venv/bin/activate
-    uv pip install pandas pyarrow pyyaml requests
-else
-    source .venv/bin/activate
-fi
+CONTAINER=<container_name>
+EVAL_DIR=/workspace/flagos/eval
 ```
 
-### 步骤 2：配置模型
-
-读取并按需修改 `config.yaml`：
+### 步骤 1：复制评测文件到容器
 
 ```bash
-cat config.yaml
+# 复制评测脚本和配置到容器
+docker cp skills/flagos-eval-correctness/tools/ $CONTAINER:$EVAL_DIR/
 ```
 
-**配置检查清单**：
+### 步骤 2：同步配置信息
 
-- [ ] `model.name` 是否正确
-- [ ] `model.api_base` 是否可达
-- [ ] `datasets.aime_path` 和 `datasets.erqa_path` 是否存在
+从 `shared/context.yaml` 读取服务信息，更新 `config.yaml`：
 
-### 步骤 3：运行评测
+| context.yaml 字段 | config.yaml 字段 |
+|-------------------|------------------|
+| `service.host` + `service.port` | `model.api_base` (如 `http://127.0.0.1:8000/v1`) |
+| `model.name` | `model.name` |
+
+### 步骤 3：准备环境
+
+```bash
+docker exec $CONTAINER bash -c "cd $EVAL_DIR && pip install pandas pyarrow pyyaml requests -q"
+```
+
+### 步骤 4：运行评测
 
 **单独运行 AIME**：
 
 ```bash
-nohup python eval_aime.py > /dev/null 2>&1 &
+docker exec $CONTAINER bash -c "cd $EVAL_DIR && nohup python eval_aime.py > /dev/null 2>&1 &"
 ```
 
 **单独运行 ERQA**：
 
 ```bash
-nohup python eval_erqa.py > /dev/null 2>&1 &
+docker exec $CONTAINER bash -c "cd $EVAL_DIR && nohup python eval_erqa.py > /dev/null 2>&1 &"
 ```
 
 **并行运行两个评测**：
 
 ```bash
-nohup python eval_aime.py > /dev/null 2>&1 &
-nohup python eval_erqa.py > /dev/null 2>&1 &
+docker exec $CONTAINER bash -c "cd $EVAL_DIR && nohup python eval_aime.py > /dev/null 2>&1 & nohup python eval_erqa.py > /dev/null 2>&1 &"
 ```
 
-### 步骤 4：监控进度
+### 步骤 5：监控进度
 
 ```bash
-tail -f eval_aime_progress.log
-tail -f eval_erqa_progress.log
-ps aux | grep "eval_"
+docker exec $CONTAINER tail -f $EVAL_DIR/eval_aime_progress.log
+docker exec $CONTAINER tail -f $EVAL_DIR/eval_erqa_progress.log
+docker exec $CONTAINER ps aux | grep "eval_"
 ```
 
-### 步骤 5：获取结果
+### 步骤 6：获取结果
 
 ```bash
-cat aime_result.json
-cat erqa_result.json
+docker exec $CONTAINER cat $EVAL_DIR/aime_result.json
+docker exec $CONTAINER cat $EVAL_DIR/erqa_result.json
+
+# 复制结果到宿主机
+docker cp $CONTAINER:$EVAL_DIR/aime_result.json skills/flagos-eval-correctness/
+docker cp $CONTAINER:$EVAL_DIR/erqa_result.json skills/flagos-eval-correctness/
 ```
 
 ---

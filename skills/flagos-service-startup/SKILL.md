@@ -256,24 +256,48 @@ USE_FLAGGEMS=1 <VISIBLE_DEVICES_ENV>=0,1,2,3 python -m sglang.launch_server \
 
 ---
 
-### 步骤 7 — 执行启动命令
+### 步骤 7 — 执行启动命令并捕获输出
 
-用户确认后，后台执行启动命令：
+用户确认后，执行启动命令并将终端输出重定向到文件：
 
 ```bash
-nohup <startup_command> > service.log 2>&1 &
+docker exec <container_name> bash -c "<startup_command> > /workspace/flagos/logs/startup.log 2>&1 &"
 ```
 
-等待服务启动（约 30-60 秒），检查日志：
+**监听终端输出，捕获关键信息：**
 
 ```bash
-tail -f service.log
+# 实时监听启动日志
+docker exec <container_name> tail -f /workspace/flagos/logs/startup.log
+```
+
+**从终端输出中提取并记录以下信息：**
+
+1. **服务日志文件路径** - 启动时会打印日志存放地址
+2. **服务端口** - 确认监听端口
+3. **模型加载状态** - 模型是否成功加载
+4. **GPU 使用情况** - 分配的 GPU 信息
+
+**提取服务日志路径示例：**
+
+```bash
+# 从输出中提取日志文件路径（根据实际输出格式调整）
+docker exec <container_name> grep -iE "log|logging|日志" /workspace/flagos/logs/startup.log
+```
+
+**等待服务就绪标志：**
+
+```bash
+# 等待出现启动成功关键字
+docker exec <container_name> bash -c "tail -f /workspace/flagos/logs/startup.log | grep -m1 'Uvicorn running\|Application startup complete\|Started server\|INFO:.*Running'"
 ```
 
 结果反馈：
 
 - 启动命令
 - 进程 PID
+- 启动输出日志：`/workspace/flagos/logs/startup.log`
+- 服务运行日志路径（从终端输出中提取）
 
 ---
 

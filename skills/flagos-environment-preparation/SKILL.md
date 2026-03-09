@@ -337,7 +337,29 @@ docker run -itd \
 
 ---
 
-## 步骤 7 — 验证容器状态
+## 步骤 7 — 创建统一工作目录
+
+**所有后续 Skill 操作必须在此目录下进行，禁止修改镜像原有文件。**
+
+```bash
+docker exec <container_name> mkdir -p /workspace/flagos/logs \
+                                       /workspace/flagos/perf \
+                                       /workspace/flagos/eval \
+                                       /workspace/flagos/output
+```
+
+目录结构说明：
+
+| 目录 | 用途 | 使用 Skill |
+|------|------|------------|
+| `/workspace/flagos/logs` | 服务启动日志 | flagos-service-startup |
+| `/workspace/flagos/perf` | 性能测试脚本和结果 | flagos-performance-testing |
+| `/workspace/flagos/eval` | 精度评测脚本和结果 | flagos-eval-correctness |
+| `/workspace/flagos/output` | 最终输出结果 | 所有 Skill |
+
+---
+
+## 步骤 8 — 验证容器状态
 
 根据检测到的 GPU 厂商，使用对应命令验证：
 
@@ -350,6 +372,9 @@ docker exec <container_name> <gpu_check_command>
 
 # 检查模型挂载
 docker exec <container_name> ls -la <container_model_path>
+
+# 检查工作目录
+docker exec <container_name> ls -la /workspace/flagos/
 ```
 
 GPU 检查命令根据厂商：
@@ -374,7 +399,7 @@ GPU 检查命令根据厂商：
 
 ---
 
-## 步骤 8 — 更新 context.yaml
+## 步骤 9 — 更新 context.yaml
 
 ```yaml
 container:
@@ -394,6 +419,13 @@ gpu:
   count: <gpu_count>
   visible_devices_env: "<env_var_name>"
 
+workspace:
+  container_path: "/workspace/flagos"
+  logs_dir: "/workspace/flagos/logs"
+  perf_dir: "/workspace/flagos/perf"
+  eval_dir: "/workspace/flagos/eval"
+  output_dir: "/workspace/flagos/output"
+
 metadata:
   updated_by: "flagos-environment-preparation"
   updated_at: "<timestamp>"
@@ -412,6 +444,7 @@ metadata:
 - 容器已创建并运行
 - 容器内 GPU 可见
 - 模型目录已正确挂载
+- 统一工作目录已创建
 - context.yaml 已更新
 
 ---

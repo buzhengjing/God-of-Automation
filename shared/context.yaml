@@ -92,6 +92,16 @@ service:
   model_id: ""            # API 返回的模型 ID
 
 # ============================================================================
+# 工作目录 (由 environment-preparation 创建，所有 skill 必须遵循)
+# ============================================================================
+workspace:
+  container_path: "/workspace/flagos"     # 容器内统一工作目录
+  logs_dir: "/workspace/flagos/logs"      # 日志目录
+  perf_dir: "/workspace/flagos/perf"      # 性能测试目录
+  eval_dir: "/workspace/flagos/eval"      # 精度评测目录
+  output_dir: "/workspace/flagos/output"  # 输出结果目录
+
+# ============================================================================
 # 元数据
 # ============================================================================
 metadata:

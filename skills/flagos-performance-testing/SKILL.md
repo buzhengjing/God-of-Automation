@@ -80,39 +80,42 @@ test_matrix:
 
 ### 步骤 3：复制文件到容器
 
+使用 `shared/context.yaml` 中的统一工作目录 `workspace.perf_dir`：
+
 ```bash
 # 获取容器名称（从 shared/context.yaml 的 container.name）
 CONTAINER=<container_name>
+PERF_DIR=/workspace/flagos/perf
 
-# 创建工作目录
-docker exec $CONTAINER mkdir -p /workspace/perf/config /workspace/perf/output
+# 创建配置子目录
+docker exec $CONTAINER mkdir -p $PERF_DIR/config $PERF_DIR/output
 
 # 复制测试脚本和配置
-docker cp skills/flagos-performance-testing/perf.py $CONTAINER:/workspace/perf/
-docker cp skills/flagos-performance-testing/config/perf_config.yaml $CONTAINER:/workspace/perf/config/
+docker cp skills/flagos-performance-testing/perf.py $CONTAINER:$PERF_DIR/
+docker cp skills/flagos-performance-testing/config/perf_config.yaml $CONTAINER:$PERF_DIR/config/
 ```
 
 ### 步骤 4：在容器内执行测试
 
 ```bash
-docker exec $CONTAINER bash -c "cd /workspace/perf && python perf.py --config config/perf_config.yaml"
+docker exec $CONTAINER bash -c "cd $PERF_DIR && python perf.py --config config/perf_config.yaml"
 ```
 
 **其他运行选项：**
 
 ```bash
 # 运行单个测试用例
-docker exec $CONTAINER bash -c "cd /workspace/perf && python perf.py --test-case 1k_input_1k_output"
+docker exec $CONTAINER bash -c "cd $PERF_DIR && python perf.py --test-case 1k_input_1k_output"
 
 # 仅打印命令不执行（调试用）
-docker exec $CONTAINER bash -c "cd /workspace/perf && python perf.py --dry-run"
+docker exec $CONTAINER bash -c "cd $PERF_DIR && python perf.py --dry-run"
 ```
 
 ### 步骤 5：获取测试结果
 
 ```bash
 # 复制结果到宿主机
-docker cp $CONTAINER:/workspace/perf/output/ skills/flagos-performance-testing/
+docker cp $CONTAINER:$PERF_DIR/output/ skills/flagos-performance-testing/
 ```
 
 ---
