@@ -11,12 +11,20 @@
 │                           主流程 (顺序执行)                                   │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│   ①                    ②                       ③                    ④      │
-│   model-introspection → environment-preparation → service-startup → flagos-performance-testing
-│   (模型检查)            (环境准备)               (服务启动)          (性能测试)  │
+│   ①                    ②                       ③                           │
+│   model-introspection → environment-preparation → service-startup           │
+│   (模型检查)            (环境准备)               (服务启动)                   │
 │                                                       │                     │
 │                                                       ↓                     │
-│                                                 ⑤ flagos-release            │
+│                                                 ④ flagos-eval-correctness   │
+│                                                   (精度测试)                 │
+│                                                       │                     │
+│                                                       ↓                     │
+│                                                 ⑤ flagos-performance-testing│
+│                                                   (性能测试)                 │
+│                                                       │                     │
+│                                                       ↓                     │
+│                                                 ⑥ flagos-release            │
 │                                                   (镜像/模型发布)            │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -25,7 +33,7 @@
 │                           独立工具 (按需调用)                                 │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│   ⑥ flagos-log-analyzer (日志分析诊断)                                      │
+│   ⑦ flagos-log-analyzer (日志分析诊断)                                      │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -129,12 +137,40 @@ runtime.gpu_count, runtime.flaggems_enabled
 
 ---
 
-### ④ flagos-performance-testing (性能测试)
+### ④ flagos-eval-correctness (精度测试)
+
+| 属性 | 说明 |
+|------|------|
+| **功能** | 自动化大模型正确性评测，支持 AIME（数学竞赛）和 ERQA（具身推理）数据集 |
+| **依赖** | `flagos-service-startup` |
+| **触发词** | `精度评测`, `正确性评测`, `accuracy test`, `eval correctness`, `AIME`, `ERQA` |
+
+**主要工作:**
+1. 准备评测环境（虚拟环境、依赖安装）
+2. 配置模型连接信息
+3. 运行 AIME/ERQA 评测脚本
+4. 监控评测进度
+5. 收集评测结果
+
+**支持的数据集:**
+| 数据集 | 类型 | 说明 |
+|--------|------|------|
+| AIME | 数学竞赛 | JSONL 格式，提取数值答案 |
+| ERQA | 具身推理 | Parquet 格式，多模态选择题 |
+
+**输出字段:**
+```yaml
+eval.aime_accuracy, eval.erqa_accuracy, eval.timestamp
+```
+
+---
+
+### ⑤ flagos-performance-testing (性能测试)
 
 | 属性 | 说明 |
 |------|------|
 | **功能** | 执行 vLLM 模型性能基准测试 |
-| **依赖** | `flagos-service-startup` |
+| **依赖** | `flagos-eval-correctness` |
 | **触发词** | `性能测试`, `benchmark`, `vllm bench`, `吞吐量测试`, `TTFT 测试`, `TPOT 测试`, `延迟测试` |
 
 **主要工作:**
@@ -166,7 +202,7 @@ benchmark.results, benchmark.timestamp
 
 ---
 
-### ⑤ flagos-release (发布)
+### ⑥ flagos-release (发布)
 
 | 属性 | 说明 |
 |------|------|
@@ -200,7 +236,7 @@ release.huggingface_url, release.modelscope_url
 
 ---
 
-### ⑥ flagos-log-analyzer (日志分析) — 独立工具
+### ⑦ flagos-log-analyzer (日志分析) — 独立工具
 
 | 属性 | 说明 |
 |------|------|
@@ -230,8 +266,9 @@ diagnosis.status, diagnosis.errors, diagnosis.suggestions
 | 1 | model-introspection | 用户提供模型来源 |
 | 2 | environment-preparation | model-introspection 完成 |
 | 3 | service-startup | environment-preparation 完成 |
-| 4 | flagos-performance-testing | service-startup 完成且服务健康 |
-| 5 | flagos-release | service-startup 完成 (可选) |
+| 4 | flagos-eval-correctness | service-startup 完成且服务健康 |
+| 5 | flagos-performance-testing | flagos-eval-correctness 完成 |
+| 6 | flagos-release | flagos-performance-testing 完成 (可选) |
 | - | flagos-log-analyzer | 任何阶段出现问题时调用 |
 
 ---
@@ -257,9 +294,14 @@ diagnosis.status, diagnosis.errors, diagnosis.suggestions
 └──────────────────┘
          │
          ↓ 读取
-┌──────────────────┐    ┌──────────────┐
-│ flagos-performance-testing │    │ flagos-release │
-└──────────────────┘    └──────────────┘
+┌─────────────────────────┐
+│ flagos-eval-correctness │
+└─────────────────────────┘
+         │
+         ↓ 读取
+┌───────────────────────────┐    ┌──────────────┐
+│ flagos-performance-testing│    │ flagos-release │
+└───────────────────────────┘    └──────────────┘
 ```
 
 ---

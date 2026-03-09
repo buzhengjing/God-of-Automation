@@ -13,7 +13,8 @@ triggers:
   - 镜像上传
   - 模型发布
 depends_on:
-  - flagos-service-startup
+  - flagos-performance-testing
+next_skill: null
 provides:
   - image.registry_url
   - image.upload_timestamp

@@ -9,6 +9,7 @@ triggers:
   - 环境准备
 depends_on:
   - flagos-model-discovery
+next_skill: flagos-service-startup
 provides:
   - container.name
   - container.status

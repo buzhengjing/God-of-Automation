@@ -11,6 +11,7 @@ triggers:
   - 健康检查
 depends_on:
   - flagos-environment-preparation
+next_skill: flagos-eval-correctness
 provides:
   - service.host
   - service.port

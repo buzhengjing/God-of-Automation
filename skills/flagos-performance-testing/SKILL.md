@@ -8,7 +8,8 @@ triggers:
   - vllm bench
   - 吞吐量测试
 depends_on:
-  - flagos-service-startup
+  - flagos-eval-correctness
+next_skill: flagos-release
 ---
 
 # 性能测试 Skill

@@ -9,6 +9,7 @@ triggers:
   - 模型发现
   - 部署配置
 depends_on: []
+next_skill: flagos-environment-preparation
 provides:
   - model.name
   - model.source
