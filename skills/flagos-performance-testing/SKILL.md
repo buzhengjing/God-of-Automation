@@ -1,7 +1,7 @@
 ---
 name: performance-testing
 description: vLLM 模型性能基准测试工具
-version: 2.0.0
+version: 2.1.0
 triggers:
   - 性能测试
   - benchmark
@@ -13,6 +13,30 @@ next_skill: flagos-release
 ---
 
 # 性能测试 Skill
+
+---
+
+# 统一工作目录
+
+**重要**：所有性能测试在 `/flagos-workspace/perf` 目录下执行，结果生成到宿主机可访问的位置。
+
+```
+容器内: /flagos-workspace/perf/
+             ├── perf.py
+             ├── config/
+             │   └── perf_config.yaml
+             └── output/
+                 └── benchmark_*.json  ← 测试结果
+
+宿主机: /data/flagos-workspace/<model_name>/perf/  ← 实时同步
+```
+
+**宿主机查看结果**：
+```bash
+# 无需 docker exec，宿主机直接查看
+ls /data/flagos-workspace/<model_name>/perf/output/
+cat /data/flagos-workspace/<model_name>/perf/output/benchmark_*.json
+```
 
 ---
 
@@ -53,9 +77,20 @@ flagos-performance-testing/
 
 ## 执行流程
 
-### 步骤 1：同步配置信息
+### 步骤 1：复制测试工具到容器工作目录
 
-从 `shared/context.yaml` 读取以下字段，填充到 `config/perf_config.yaml`：
+```bash
+# 在宿主机执行
+CONTAINER=<container_name>
+
+# 复制测试脚本和配置到工作目录
+docker cp skills/flagos-performance-testing/perf.py $CONTAINER:/flagos-workspace/perf/
+docker cp skills/flagos-performance-testing/config/. $CONTAINER:/flagos-workspace/perf/config/
+```
+
+### 步骤 2：同步配置信息
+
+从 `shared/context.yaml` 读取以下字段，填充到 `/flagos-workspace/perf/config/perf_config.yaml`：
 
 | context.yaml 字段 | perf_config.yaml 字段 |
 |-------------------|----------------------|
@@ -64,9 +99,16 @@ flagos-performance-testing/
 | `model.name` 或 `model.container_path` | `model.name` |
 | `model.tokenizer_path` 或 `model.container_path` | `model.tokenizer_path` |
 
+**可直接在宿主机编辑配置**：
+
+```bash
+# 宿主机直接编辑（无需 docker exec）
+vim /data/flagos-workspace/<model_name>/perf/config/perf_config.yaml
+```
+
 **注意**：容器内服务地址通常为 `127.0.0.1` 或 `localhost`
 
-### 步骤 2：调整测试矩阵（如需要）
+### 步骤 3：调整测试矩阵（如需要）
 
 根据模型的 `max_model_len` 禁用超出范围的测试用例：
 
@@ -78,41 +120,28 @@ test_matrix:
     enabled: false  # 如果 max_model_len < 16384
 ```
 
-### 步骤 3：复制文件到容器
-
-```bash
-# 获取容器名称（从 shared/context.yaml 的 container.name）
-CONTAINER=<container_name>
-
-# 创建工作目录
-docker exec $CONTAINER mkdir -p /workspace/perf/config /workspace/perf/output
-
-# 复制测试脚本和配置
-docker cp skills/flagos-performance-testing/perf.py $CONTAINER:/workspace/perf/
-docker cp skills/flagos-performance-testing/config/perf_config.yaml $CONTAINER:/workspace/perf/config/
-```
-
 ### 步骤 4：在容器内执行测试
 
 ```bash
-docker exec $CONTAINER bash -c "cd /workspace/perf && python perf.py --config config/perf_config.yaml"
+docker exec $CONTAINER bash -c "cd /flagos-workspace/perf && python perf.py --config config/perf_config.yaml"
 ```
 
 **其他运行选项：**
 
 ```bash
 # 运行单个测试用例
-docker exec $CONTAINER bash -c "cd /workspace/perf && python perf.py --test-case 1k_input_1k_output"
+docker exec $CONTAINER bash -c "cd /flagos-workspace/perf && python perf.py --test-case 1k_input_1k_output"
 
 # 仅打印命令不执行（调试用）
-docker exec $CONTAINER bash -c "cd /workspace/perf && python perf.py --dry-run"
+docker exec $CONTAINER bash -c "cd /flagos-workspace/perf && python perf.py --dry-run"
 ```
 
-### 步骤 5：获取测试结果
+### 步骤 5：获取测试结果（宿主机直接访问）
 
 ```bash
-# 复制结果到宿主机
-docker cp $CONTAINER:/workspace/perf/output/ skills/flagos-performance-testing/
+# 无需 docker cp，宿主机直接查看
+ls /data/flagos-workspace/<model_name>/perf/output/
+cat /data/flagos-workspace/<model_name>/perf/output/benchmark_*.json
 ```
 
 ---

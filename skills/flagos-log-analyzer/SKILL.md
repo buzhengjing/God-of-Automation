@@ -1,7 +1,7 @@
 ---
 name: flagos-log-analyzer
 description: 分析推理服务日志以诊断启动失败、运行时错误、GPU 问题或 FlagGems 集成问题
-version: 1.0.0
+version: 1.1.0
 license: internal
 triggers:
   - log analysis
@@ -29,32 +29,57 @@ provides:
 
 ---
 
-# 工作流程
+# 统一工作目录
 
-按顺序执行步骤。
+**重要**：由于使用了统一工作目录挂载，日志文件可直接在宿主机访问，**无需 docker exec**。
+
+```
+宿主机日志路径: /data/flagos-workspace/<model_name>/
+                    │
+                    ├── output/           # 服务启动日志
+                    │   └── <服务名>/
+                    │       └── serve/
+                    │           └── *.log
+                    │
+                    └── eval/             # 评测日志
+                        └── eval_*.log
+```
+
+**宿主机直接访问日志**：
+```bash
+# 查找所有日志文件
+find /data/flagos-workspace/<model_name> -name "*.log"
+
+# 实时查看服务日志
+tail -f /data/flagos-workspace/<model_name>/output/**/*.log
+```
 
 ---
 
-## 步骤 1 — 定位日志文件
+# 工作流程
 
-识别可能的日志位置。
+按顺序执行步骤。**所有日志分析操作均在宿主机执行，无需进入容器。**
 
-常见示例：
+---
 
-service.log
-vllm.log
-sglang.log
-nohup.out
+## 步骤 1 — 定位日志文件（宿主机直接访问）
 
-如果用户使用 nohup 启动服务：
+在宿主机查找日志文件：
 
-nohup <command> > service.log 2>&1 &
+```bash
+# 查找工作目录下所有日志
+find /data/flagos-workspace/<model_name> -name "*.log" -type f
 
-则日志通常在：
+# 查看日志文件详情
+ls -la /data/flagos-workspace/<model_name>/output/
+```
 
-service.log
+常见日志位置：
 
-如果日志文件位置未知，请用户提供。
+| 类型 | 宿主机路径 |
+|------|-----------|
+| 服务日志 | `/data/flagos-workspace/<model>/output/<服务名>/serve/*.log` |
+| 评测日志 | `/data/flagos-workspace/<model>/eval/eval_*.log` |
 
 结果反馈必须包括：
 
@@ -66,9 +91,12 @@ service.log
 
 ## 步骤 2 — 检查最近的日志输出
 
-显示最新的日志行：
+在宿主机显示最新的日志行：
 
-tail -n 100 <log_file>
+```bash
+# 宿主机直接查看（无需 docker exec）
+tail -n 100 /data/flagos-workspace/<model_name>/output/**/*.log
+```
 
 关注：
 
@@ -86,22 +114,25 @@ tail -n 100 <log_file>
 
 ## 步骤 3 — 检测常见启动错误
 
-搜索常见的失败关键词。
+在宿主机搜索常见的失败关键词：
 
-示例：
+```bash
+# 宿主机直接搜索（无需 docker exec）
+LOG_DIR="/data/flagos-workspace/<model_name>/output"
 
-grep -i "error" <log_file>
-grep -i "cuda" <log_file>
-grep -i "oom" <log_file>
-grep -i "traceback" <log_file>
+grep -ri "error" $LOG_DIR
+grep -ri "cuda" $LOG_DIR
+grep -ri "oom" $LOG_DIR
+grep -ri "traceback" $LOG_DIR
+```
 
 典型失败类型：
 
-GPU 内存问题
-CUDA 驱动不匹配
-缺少模型文件
-Tokenizer 错误
-依赖冲突
+- GPU 内存问题
+- CUDA 驱动不匹配
+- 缺少模型文件
+- Tokenizer 错误
+- 依赖冲突
 
 结果反馈：
 
@@ -112,17 +143,20 @@ Tokenizer 错误
 
 ## 步骤 4 — 检测 FlagGems 执行
 
-搜索 FlagGems 执行消息。
+在宿主机搜索 FlagGems 执行消息：
 
-示例：
-
-grep -i "gems" <log_file>
+```bash
+# 宿主机直接搜索（无需 docker exec）
+grep -ri "gems\|flag_gems" /data/flagos-workspace/<model_name>/output/
+```
 
 典型模式：
 
-flag_gems.ops
+```
+flag_gems.ops loaded
 GEMS MUL
 GEMS RECIPROCAL
+```
 
 这些日志表明 FlagGems 加速算子正在执行。
 
@@ -135,13 +169,12 @@ GEMS RECIPROCAL
 
 ## 步骤 5 — 检测 GPU 或内存错误
 
-搜索 GPU 相关问题。
+在宿主机搜索 GPU 相关问题：
 
-示例关键词：
-
-CUDA out of memory
-device not found
-driver mismatch
+```bash
+# 宿主机直接搜索（无需 docker exec）
+grep -riE "CUDA out of memory|device not found|driver mismatch|OOM" /data/flagos-workspace/<model_name>/output/
+```
 
 结果反馈：
 

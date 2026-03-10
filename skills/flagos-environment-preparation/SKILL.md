@@ -1,7 +1,7 @@
 ---
 name: flagos-environment-preparation
 description: 准备 FlagOS 推理环境，包括模型下载（可选）、Docker 镜像拉取和容器创建
-version: 1.0.0
+version: 1.1.0
 license: internal
 triggers:
   - environment preparation
@@ -18,6 +18,8 @@ provides:
   - model.local_path
   - gpu.vendor
   - gpu.count
+  - workspace.host_path
+  - workspace.container_path
 ---
 
 # 环境准备 Skill
@@ -27,6 +29,47 @@ provides:
 模型下载为可选步骤，如模型已在服务器上则自动跳过。
 
 支持多厂商 GPU：NVIDIA、华为、海光、摩尔线程、昆仑芯、天数、沐曦、清微智能、寒武纪、平头哥。
+
+---
+
+# 统一工作目录
+
+**核心设计**：所有操作在 `/flagos-workspace` 目录下进行，该目录挂载到宿主机，实现日志和结果的实时访问。
+
+## 目录映射
+
+```
+宿主机: /data/flagos-workspace/<model_name>/
+                      ↓ 挂载
+容器内: /flagos-workspace/
+```
+
+## 目录结构（服务启动后自动生成）
+
+```
+/flagos-workspace/
+├── output/                    # 服务启动后自动生成的日志目录
+│   └── <服务名>/
+│       └── serve/
+│           └── *.log          # 服务日志
+│
+├── eval/                      # 评测结果
+│   ├── aime_result.json
+│   ├── erqa_result.json
+│   └── *.log
+│
+├── perf/                      # 性能测试结果
+│   └── benchmark_*.json
+│
+└── shared/
+    └── context.yaml           # 共享上下文
+```
+
+## 优势
+
+- **实时日志监控**：宿主机直接 `tail -f /data/flagos-workspace/<model>/output/**/*.log`
+- **无需 docker exec 查看日志**：所有日志和结果在宿主机可直接访问
+- **结果持久化**：容器删除后数据仍保留在宿主机
 
 ---
 
@@ -62,6 +105,10 @@ image:
 model:
   local_path: <模型在主机上的路径>
   container_path: <模型在容器内的路径>
+
+workspace:
+  host_path: "/data/flagos-workspace/<model_name>"
+  container_path: "/flagos-workspace"
 
 gpu:
   vendor: <nvidia|huawei|hygon|mthreads|kunlunxin|tianshu|metax|tsingmicro|cambricon|alibaba>
@@ -265,13 +312,35 @@ docker images | grep <image_name>
 
 ---
 
+## 步骤 5.5 — 创建宿主机工作目录
+
+在创建容器前，先在宿主机创建工作目录：
+
+```bash
+# 创建工作目录结构
+WORKSPACE_HOST="/data/flagos-workspace/<model_name>"
+mkdir -p ${WORKSPACE_HOST}/{eval,perf,shared}
+
+# 验证目录创建成功
+ls -la ${WORKSPACE_HOST}
+```
+
+---
+
 ## 步骤 6 — 创建并启动容器
 
 ### 6.1 使用 README 中的 docker run 命令
 
 如果 context.yaml 中有 `deployment.docker_run`：
 
-向用户展示命令，确认后执行。
+**重要**：需要在原命令基础上添加工作目录挂载：
+
+```bash
+# 在原有 docker run 命令中添加以下挂载参数：
+-v /data/flagos-workspace/<model_name>:/flagos-workspace
+```
+
+向用户展示修改后的命令，确认后执行。
 
 ### 6.2 或根据 GPU 厂商生成命令
 
@@ -283,6 +352,7 @@ docker run -itd \
   --shm-size 32g \
   --ulimit memlock=-1 \
   -v <host_model_path>:<container_model_path> \
+  -v /data/flagos-workspace/<model_name>:/flagos-workspace \
   -p 8000:8000 \
   <image> \
   /bin/bash
@@ -299,6 +369,7 @@ docker run -itd \
   --shm-size 32g \
   -v /usr/local/Ascend/driver:/usr/local/Ascend/driver \
   -v <host_model_path>:<container_model_path> \
+  -v /data/flagos-workspace/<model_name>:/flagos-workspace \
   -p 8000:8000 \
   <image> \
   /bin/bash
@@ -312,6 +383,7 @@ docker run -itd \
   --shm-size 32g \
   --ulimit memlock=-1 \
   -v <host_model_path>:<container_model_path> \
+  -v /data/flagos-workspace/<model_name>:/flagos-workspace \
   -p 8000:8000 \
   <image> \
   /bin/bash
@@ -324,7 +396,8 @@ docker run -itd \
 | `--gpus all` | NVIDIA GPU（其他厂商使用 --privileged 或指定设备） |
 | `--shm-size 32g` | 共享内存大小，大模型需要 |
 | `--ulimit memlock=-1` | 解除内存锁定限制 |
-| `-v` | 挂载模型目录 |
+| `-v <model>` | 挂载模型目录 |
+| `-v <workspace>` | **挂载工作目录（日志、评测、性能测试结果）** |
 | `-p 8000:8000` | 端口映射 |
 | `-itd` | 交互式后台运行 |
 
@@ -350,6 +423,9 @@ docker exec <container_name> <gpu_check_command>
 
 # 检查模型挂载
 docker exec <container_name> ls -la <container_model_path>
+
+# 检查工作目录挂载
+docker exec <container_name> ls -la /flagos-workspace
 ```
 
 GPU 检查命令根据厂商：
@@ -371,6 +447,7 @@ GPU 检查命令根据厂商：
 - 容器状态（运行中/已停止）
 - 容器内 GPU 可见性
 - 模型目录挂载状态
+- **工作目录挂载状态**
 
 ---
 
@@ -388,6 +465,10 @@ image:
 model:
   local_path: "<host_model_path>"
   container_path: "<container_model_path>"
+
+workspace:
+  host_path: "/data/flagos-workspace/<model_name>"
+  container_path: "/flagos-workspace"
 
 gpu:
   vendor: "<gpu_vendor>"
@@ -412,6 +493,7 @@ metadata:
 - 容器已创建并运行
 - 容器内 GPU 可见
 - 模型目录已正确挂载
+- **工作目录 `/flagos-workspace` 已正确挂载**
 - context.yaml 已更新
 
 ---

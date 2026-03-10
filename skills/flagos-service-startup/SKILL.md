@@ -1,7 +1,7 @@
 ---
 name: flagos-service-startup
 description: 启动模型推理服务，验证运行时环境，并验证服务健康状态
-version: 1.0.0
+version: 1.1.0
 license: internal
 triggers:
   - service startup
@@ -28,6 +28,32 @@ provides:
 
 ---
 
+# 统一工作目录
+
+**重要**：所有服务启动操作必须在 `/flagos-workspace` 目录下执行，确保日志生成到宿主机可访问的位置。
+
+```
+容器内: /flagos-workspace/          ← 启动服务的工作目录
+             │
+             └── output/            ← 服务启动后自动生成
+                 └── <服务名>/
+                     └── serve/
+                         └── *.log  ← 服务日志
+
+宿主机: /data/flagos-workspace/<model_name>/output/  ← 实时同步，可直接访问
+```
+
+**宿主机实时监控日志**：
+```bash
+# 查找日志文件
+find /data/flagos-workspace/<model_name>/output -name "*.log"
+
+# 实时查看
+tail -f /data/flagos-workspace/<model_name>/output/**/*.log
+```
+
+---
+
 # 上下文集成
 
 ## 从 shared/context.yaml 读取
@@ -39,6 +65,9 @@ model:
   name: <来自 model-introspection>
   local_path: <来自 environment-preparation>
   container_path: <来自 environment-preparation>
+workspace:
+  host_path: <来自 environment-preparation>
+  container_path: "/flagos-workspace"
 runtime:
   framework: <来自 model-introspection>
 gpu:
@@ -56,6 +85,7 @@ service:
   process_id: <运行中服务的 PID>
   healthy: <true|false>
   model_id: <API 响应中的模型标识符>
+  log_path: <服务日志路径，如 /flagos-workspace/output/.../serve/*.log>
 runtime:
   gpu_count: <可见 GPU 数量>
   flaggems_enabled: <true|false>
@@ -258,22 +288,36 @@ USE_FLAGGEMS=1 <VISIBLE_DEVICES_ENV>=0,1,2,3 python -m sglang.launch_server \
 
 ### 步骤 7 — 执行启动命令
 
+**重要**：必须先 `cd` 到工作目录，确保 `output/` 日志目录生成在挂载路径下。
+
 用户确认后，后台执行启动命令：
 
 ```bash
-nohup <startup_command> > service.log 2>&1 &
+# 在容器内的工作目录下启动服务
+docker exec <container_name> bash -c "cd /flagos-workspace && <startup_command>"
 ```
 
-等待服务启动（约 30-60 秒），检查日志：
+**完整示例（vLLM）**：
 
 ```bash
-tail -f service.log
+docker exec <container_name> bash -c "cd /flagos-workspace && USE_FLAGGEMS=1 CUDA_VISIBLE_DEVICES=0,1,2,3 vllm serve <model_path> --served-model-name <model_name> --tensor-parallel-size 4 --port 8000"
+```
+
+等待服务启动（约 30-60 秒），**在宿主机直接查看日志**：
+
+```bash
+# 查找生成的日志文件
+find /data/flagos-workspace/<model_name>/output -name "*.log"
+
+# 实时查看日志（无需 docker exec）
+tail -f /data/flagos-workspace/<model_name>/output/**/*.log
 ```
 
 结果反馈：
 
 - 启动命令
 - 进程 PID
+- **日志文件路径（宿主机）**
 
 ---
 
@@ -330,10 +374,11 @@ curl -s http://localhost:8000/v1/chat/completions \
 
 ### 步骤 11 — 验证 FlagGems 执行（如已启用）
 
-如果启用了 FlagGems，检查日志确认算子替换生效：
+如果启用了 FlagGems，**在宿主机**检查日志确认算子替换生效：
 
 ```bash
-grep -i "gems\|flag_gems" service.log | head -10
+# 在宿主机直接查看日志（无需 docker exec）
+grep -ri "gems\|flag_gems" /data/flagos-workspace/<model_name>/output/ | head -10
 ```
 
 典型输出模式：
@@ -358,6 +403,8 @@ GEMS RECIPROCAL
 - 运行时环境已验证
 - FlagGems 状态已确认（启用/禁用）
 - 服务进程正在运行
+- **日志文件已生成在 `/flagos-workspace/output/` 目录**
+- **宿主机可直接访问日志文件**
 - API /v1/models 可访问
 - 推理测试通过
 - （如启用）FlagGems 算子替换已生效

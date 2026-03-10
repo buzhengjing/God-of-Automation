@@ -4,6 +4,39 @@
 
 ---
 
+## 统一工作目录
+
+**核心设计**：所有操作在统一挂载的 `/flagos-workspace` 目录下进行，宿主机可实时访问日志和结果。
+
+```
+宿主机: /data/flagos-workspace/<model_name>/
+                      ↓ 挂载
+容器内: /flagos-workspace/
+             │
+             ├── output/          # 服务启动后自动生成的日志
+             │   └── <服务名>/
+             │       └── serve/
+             │           └── *.log
+             │
+             ├── eval/            # 评测结果和日志
+             │   ├── aime_result.json
+             │   ├── erqa_result.json
+             │   └── eval_*.log
+             │
+             ├── perf/            # 性能测试结果
+             │   └── benchmark_*.json
+             │
+             └── shared/
+                 └── context.yaml # 共享上下文
+```
+
+**优势**：
+- **实时日志监控**：宿主机直接 `tail -f /data/flagos-workspace/<model>/output/**/*.log`
+- **无需 docker exec**：所有日志、配置、结果在宿主机可直接访问和编辑
+- **结果持久化**：容器删除后数据仍保留在宿主机
+
+---
+
 ## Skills 架构图
 
 ```
@@ -33,7 +66,7 @@
 │                           独立工具 (按需调用)                                 │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│   ⑦ flagos-log-analyzer (日志分析诊断)                                      │
+│   ⑦ flagos-log-analyzer (日志分析诊断) — 宿主机直接访问日志，无需 docker exec │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -286,23 +319,26 @@ diagnosis.status, diagnosis.errors, diagnosis.suggestions
                     └─────────────────┘
                              ↑
 ┌────────────────────────┐   │
-│ environment-preparation │──追加
+│ environment-preparation │──追加 (含 workspace.host_path, workspace.container_path)
 └────────────────────────┘   │
                              ↑
 ┌──────────────────┐         │
-│ service-startup  │─────追加┘
+│ service-startup  │─────追加 (含 service.log_path)
 └──────────────────┘
          │
          ↓ 读取
 ┌─────────────────────────┐
-│ flagos-eval-correctness │
+│ flagos-eval-correctness │ → 结果写入 /flagos-workspace/eval/
 └─────────────────────────┘
          │
          ↓ 读取
 ┌───────────────────────────┐    ┌──────────────┐
 │ flagos-performance-testing│    │ flagos-release │
+│ → 结果写入 /flagos-workspace/perf/             │
 └───────────────────────────┘    └──────────────┘
 ```
+
+**所有结果文件宿主机直接可访问**：`/data/flagos-workspace/<model_name>/`
 
 ---
 
@@ -325,8 +361,31 @@ diagnosis.status, diagnosis.errors, diagnosis.suggestions
 
 ## 关键配置文件
 
-| 文件 | 用途 |
-|------|------|
-| `shared/context.yaml` | Skill 间共享上下文 |
-| `config/perf_config.yaml` | 性能测试配置 |
-| `skills/*/SKILL.md` | Skill 定义文件 |
+| 文件 | 宿主机路径 | 用途 |
+|------|-----------|------|
+| `context.yaml` | `/data/flagos-workspace/<model>/shared/context.yaml` | Skill 间共享上下文 |
+| `perf_config.yaml` | `/data/flagos-workspace/<model>/perf/config/perf_config.yaml` | 性能测试配置 |
+| `config.yaml` | `/data/flagos-workspace/<model>/eval/config.yaml` | 评测配置 |
+| `skills/*/SKILL.md` | 项目目录内 | Skill 定义文件 |
+
+---
+
+## 宿主机常用命令
+
+```bash
+# 实时查看服务日志
+tail -f /data/flagos-workspace/<model>/output/**/*.log
+
+# 查看评测进度
+tail -f /data/flagos-workspace/<model>/eval/eval_*.log
+
+# 查看评测结果
+cat /data/flagos-workspace/<model>/eval/aime_result.json
+cat /data/flagos-workspace/<model>/eval/erqa_result.json
+
+# 查看性能测试结果
+cat /data/flagos-workspace/<model>/perf/output/benchmark_*.json
+
+# 搜索错误日志
+grep -ri "error" /data/flagos-workspace/<model>/output/
+```
