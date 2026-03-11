@@ -1,20 +1,22 @@
 ---
-name: flagos-environment-preparation
-description: 准备 FlagOS 推理环境，包括模型下载（可选）、Docker 镜像拉取和容器创建
-version: 1.1.0
+name: flagos-container-preparation
+description: 容器启动前准备，包括 GPU 检测、主机环境验证、Docker 容器创建（前提：已有可用镜像）
+version: 2.0.0
 license: internal
 triggers:
-  - environment preparation
-  - prepare environment
+  - container preparation
+  - prepare container
+  - 容器准备
   - 环境准备
-depends_on:
-  - flagos-model-discovery
-next_skill: flagos-service-startup
+depends_on: []
+next_skill: flagos-pre-service-inspection
 provides:
   - container.name
   - container.status
   - image.name
   - image.tag
+  - model.name
+  - model.url
   - model.local_path
   - gpu.vendor
   - gpu.count
@@ -22,11 +24,11 @@ provides:
   - workspace.container_path
 ---
 
-# 环境准备 Skill
+# 容器启动前准备 Skill
 
-此 Skill 准备模型部署所需的运行时环境，包括镜像拉取和容器创建。
+此 Skill 为"已有可用镜像/容器"场景设计，接收用户直接提供的模型名、模型 URL 和镜像地址，完成 GPU 检测、主机环境验证和容器创建。
 
-模型下载为可选步骤，如模型已在服务器上则自动跳过。
+**前提条件**：用户已有可用的 Docker 镜像（无需从 README 解析或下载模型）。
 
 支持多厂商 GPU：NVIDIA、华为、海光、摩尔线程、昆仑芯、天数、沐曦、清微智能、寒武纪、平头哥。
 
@@ -65,62 +67,75 @@ provides:
     └── context.yaml           # 共享上下文
 ```
 
-## 优势
-
-- **实时日志监控**：宿主机直接 `tail -f /data/flagos-workspace/<model>/output/**/*.log`
-- **无需 docker exec 查看日志**：所有日志和结果在宿主机可直接访问
-- **结果持久化**：容器删除后数据仍保留在宿主机
-
 ---
 
 # 上下文集成
 
-## 从 shared/context.yaml 读取
+## 读取
 
-```yaml
-model:
-  name: <来自 model-introspection>
-  source: <来自 model-introspection>
+无（流程起点）。用户直接提供以下输入：
 
-deployment:
-  image: <来自 model-introspection>
-  docker_run: <来自 model-introspection>
-  model_download: <来自 model-introspection>
-
-runtime:
-  framework: <来自 model-introspection>
-```
+| 输入 | 说明 |
+|------|------|
+| 模型名 | 模型标识名，如 `Qwen2.5-7B-Instruct` |
+| 模型 URL | 模型在容器内或宿主机上的路径 |
+| 镜像地址 | Docker 镜像地址，如 `harbor.baai.ac.cn/...` |
 
 ## 写入 shared/context.yaml
 
 ```yaml
+model:
+  name: "<模型名称>"
+  url: "<用户提供的模型 URL>"
+  local_path: "<模型在主机上的路径>"
+  container_path: "<模型在容器内的路径>"
+
 container:
-  name: <创建的容器名称>
-  status: <running|stopped>
+  name: "<创建的容器名称>"
+  status: "running"
 
 image:
-  name: <Docker 镜像名称>
-  tag: <Docker 镜像标签>
-
-model:
-  local_path: <模型在主机上的路径>
-  container_path: <模型在容器内的路径>
+  name: "<Docker 镜像名称>"
+  tag: "<Docker 镜像标签>"
 
 workspace:
   host_path: "/data/flagos-workspace/<model_name>"
   container_path: "/flagos-workspace"
 
 gpu:
-  vendor: <nvidia|huawei|hygon|mthreads|kunlunxin|tianshu|metax|tsingmicro|cambricon|alibaba>
+  vendor: "<nvidia|huawei|hygon|mthreads|kunlunxin|tianshu|metax|tsingmicro|cambricon|alibaba>"
+  type: "<GPU 型号>"
   count: <GPU 数量>
-  visible_devices_env: <环境变量名>
+  visible_devices_env: "<环境变量名>"
+
+metadata:
+  updated_by: "flagos-container-preparation"
+  updated_at: "<timestamp>"
 ```
 
 ---
 
 # 工作流程
 
-## 步骤 1 — 检测 GPU 厂商和状态
+## 步骤 1 — 接收用户输入
+
+询问用户提供以下信息：
+
+- **模型名**：模型标识名（如 `Qwen2.5-7B-Instruct`）
+- **模型 URL**：模型路径（宿主机或容器内）
+- **镜像地址**：Docker 镜像完整地址
+
+示例：
+
+```
+模型名: Qwen2.5-7B-Instruct
+模型 URL: /data/models/Qwen2.5-7B-Instruct
+镜像地址: harbor.baai.ac.cn/flagrelease-public/flagos-vllm:latest
+```
+
+---
+
+## 步骤 2 — 检测 GPU 厂商和状态
 
 依次尝试各厂商的检测命令，确定 GPU 类型：
 
@@ -194,7 +209,7 @@ echo "检测到 GPU 厂商: $GPU_VENDOR"
 
 ---
 
-## 步骤 2 — 验证主机基础环境
+## 步骤 3 — 验证主机基础环境
 
 ```bash
 # 检查 Docker
@@ -217,104 +232,7 @@ free -h
 
 ---
 
-## 步骤 3 — 检查模型是否已存在（可跳过下载）
-
-询问用户模型路径或检查常用位置：
-
-```bash
-# 检查常用模型目录
-ls -la /data/models/
-ls -la /root/models/
-ls -la ~/models/
-```
-
-询问用户：
-
-"请提供模型在服务器上的路径，或输入 'download' 执行下载"
-
-**如果模型已存在：**
-
-验证模型文件完整性：
-
-```bash
-ls -la <model_path>/
-# 应包含: config.json, tokenizer.json, *.safetensors 等
-```
-
-记录模型路径，跳过下载步骤。
-
-**如果需要下载：**
-
-继续步骤 4。
-
----
-
-## 步骤 4 — 下载模型（可选）
-
-使用 context.yaml 中的 `deployment.model_download` 命令，或根据来源生成：
-
-**ModelScope：**
-```bash
-modelscope download \
-  --model <model_repo> \
-  --local_dir <model_directory>
-```
-
-**HuggingFace：**
-```bash
-huggingface-cli download <model_repo> \
-  --local-dir <model_directory>
-```
-
-验证下载：
-
-```bash
-ls -la <model_directory>/
-du -sh <model_directory>/
-```
-
-结果反馈：
-
-- 下载状态
-- 模型大小
-- 文件列表
-
----
-
-## 步骤 5 — 拉取 Docker 镜像
-
-使用 context.yaml 中的 `deployment.image`：
-
-```bash
-docker pull <image>
-```
-
-验证镜像：
-
-```bash
-docker images | grep -i <image_name>
-```
-
-**如果镜像已存在：**
-
-```bash
-# 检查本地镜像
-docker images | grep <image_name>
-```
-
-询问用户是否使用现有镜像或重新拉取。
-
-结果反馈：
-
-- 镜像名称
-- 镜像大小
-- 镜像 ID
-
----
-
-## 步骤 5.5 — 创建宿主机工作目录
-
-在创建容器前，先在宿主机创建工作目录：
+## 步骤 4 — 创建宿主机工作目录
 
 ```bash
 # 创建工作目录结构
@@ -327,22 +245,9 @@ ls -la ${WORKSPACE_HOST}
 
 ---
 
-## 步骤 6 — 创建并启动容器
+## 步骤 5 — 生成并执行 docker run 命令
 
-### 6.1 使用 README 中的 docker run 命令
-
-如果 context.yaml 中有 `deployment.docker_run`：
-
-**重要**：需要在原命令基础上添加工作目录挂载：
-
-```bash
-# 在原有 docker run 命令中添加以下挂载参数：
--v /data/flagos-workspace/<model_name>:/flagos-workspace
-```
-
-向用户展示修改后的命令，确认后执行。
-
-### 6.2 或根据 GPU 厂商生成命令
+根据 GPU 厂商生成对应的 docker run 命令。
 
 **NVIDIA：**
 ```bash
@@ -408,11 +313,11 @@ docker run -itd \
 例如: qwen2.5-7b_flagos
 ```
 
+向用户展示生成的命令，确认后执行。
+
 ---
 
-## 步骤 7 — 验证容器状态
-
-根据检测到的 GPU 厂商，使用对应命令验证：
+## 步骤 6 — 验证容器状态
 
 ```bash
 # 检查容器运行状态
@@ -451,46 +356,21 @@ GPU 检查命令根据厂商：
 
 ---
 
-## 步骤 8 — 更新 context.yaml
+## 步骤 7 — 写入 context.yaml
 
-```yaml
-container:
-  name: "<container_name>"
-  status: "running"
-
-image:
-  name: "<image_name>"
-  tag: "<image_tag>"
-
-model:
-  local_path: "<host_model_path>"
-  container_path: "<container_model_path>"
-
-workspace:
-  host_path: "/data/flagos-workspace/<model_name>"
-  container_path: "/flagos-workspace"
-
-gpu:
-  vendor: "<gpu_vendor>"
-  count: <gpu_count>
-  visible_devices_env: "<env_var_name>"
-
-metadata:
-  updated_by: "flagos-environment-preparation"
-  updated_at: "<timestamp>"
-```
+将所有检测和创建结果写入 `shared/context.yaml`。
 
 ---
 
 # 完成条件
 
-环境准备成功的标志：
+容器准备成功的标志：
 
+- 用户输入已确认（模型名、模型 URL、镜像地址）
 - GPU 厂商已识别
 - 主机环境验证通过
-- 模型路径已确定（下载或已存在）
-- Docker 镜像已就绪
-- 容器已创建并运行
+- 宿主机工作目录已创建
+- Docker 容器已创建并运行
 - 容器内 GPU 可见
 - 模型目录已正确挂载
 - **工作目录 `/flagos-workspace` 已正确挂载**
@@ -508,4 +388,4 @@ metadata:
 | 模型目录为空 | 确认挂载路径正确，检查权限 |
 | 容器内 GPU 不可见 | NVIDIA 检查 `--gpus all`；其他厂商检查设备挂载 |
 
-下一步应执行 **flagos-service-startup**。
+下一步应执行 **flagos-pre-service-inspection**。

@@ -2,47 +2,45 @@
 # 由上游 skill 写入，下游 skill 读取
 #
 # 使用说明:
-#   - flagos-model-introspection 写入模型和部署信息
-#   - flagos-environment-preparation 写入容器和 GPU 信息
+#   - flagos-container-preparation 写入模型、容器和 GPU 信息
+#   - flagos-pre-service-inspection 写入环境检查信息
 #   - flagos-service-startup 写入服务信息
+#   - flagos-operator-replacement 写入算子替换信息
 #   - flagos-performance-testing 读取服务连接信息
 
 # ============================================================================
-# 模型信息 (由 model-introspection 写入)
+# 模型信息 (由 container-preparation 写入)
 # ============================================================================
 model:
-  name: ""                # 模型标识名
-  source: ""              # 来源: modelscope|huggingface|git|local
-  readme_found: false     # 是否找到 README
+  name: ""                # 模型标识名（用户直接提供）
+  url: ""                 # 模型 URL（用户直接提供）
   local_path: ""          # 模型在主机上的路径
   container_path: ""      # 模型在容器内的路径
   tokenizer_path: ""      # tokenizer 路径 (通常与 model 路径相同)
 
 # ============================================================================
-# 部署信息 (由 model-introspection 写入)
-# ============================================================================
-deployment:
-  image: ""               # Docker 镜像地址
-  docker_run: ""          # docker run 命令
-  startup_command: ""     # 服务启动命令
-  model_download: ""      # 模型下载命令
-
-# ============================================================================
-# 容器信息 (由 environment-preparation 写入)
+# 容器信息 (由 container-preparation 写入)
 # ============================================================================
 container:
   name: ""                # 容器名称
   status: ""              # 状态: running|stopped
 
 # ============================================================================
-# 镜像信息 (由 environment-preparation 写入)
+# 镜像信息 (由 container-preparation 写入)
 # ============================================================================
 image:
-  name: ""                # 镜像名称
+  name: ""                # 镜像名称（用户直接提供）
   tag: ""                 # 镜像标签
 
 # ============================================================================
-# GPU 信息 (由 environment-preparation 写入)
+# 工作目录 (由 container-preparation 写入)
+# ============================================================================
+workspace:
+  host_path: ""           # 宿主机路径: /data/flagos-workspace/<model_name>
+  container_path: "/flagos-workspace"
+
+# ============================================================================
+# GPU 信息 (由 container-preparation 写入)
 # ============================================================================
 gpu:
   vendor: ""              # 厂商: nvidia|huawei|hygon|mthreads|kunlunxin|tianshu|metax|tsingmicro|cambricon|alibaba
@@ -74,6 +72,25 @@ gpu:
 #   cambricon   -> cnmon
 
 # ============================================================================
+# 环境检查信息 (由 pre-service-inspection 写入)
+# ============================================================================
+inspection:
+  core_packages:            # 核心组件版本
+    torch: ""
+    vllm: ""
+    sglang: ""
+  flag_packages:            # flag 生态组件版本
+    flaggems: ""
+    flagscale: ""
+    flagcx: ""
+    vllm_plugin: ""
+  flaggems_control: ""      # env_var | code_comment
+  flaggems_logic: ""        # unused | only_enable
+  flaggems_code_path: ""    # flaggems 代码所在文件路径
+  flaggems_code_lines: ""   # 相关代码行号范围
+  env_vars: {}              # flag 相关环境变量 (USE_FLAGGEMS, USE_FLAGOS 等)
+
+# ============================================================================
 # 运行时信息 (由 service-startup 写入)
 # ============================================================================
 runtime:
@@ -90,6 +107,35 @@ service:
   process_id: ""          # 服务进程 PID
   healthy: false          # 服务是否健康
   model_id: ""            # API 返回的模型 ID
+  log_path: ""            # 服务日志路径
+  gems_txt_path: ""       # gems.txt 文件路径
+  initial_operator_list: [] # 初始算子列表
+
+# ============================================================================
+# 评测信息 (由 eval-correctness 写入)
+# ============================================================================
+eval:
+  request_id: ""            # 远端评测任务 ID
+  domain: ""                # 评测领域: NLP|MM
+  mode: ""                  # 评测模式: FlagRelease|XLC_train|XLC_infer 等
+  eval_method: ""           # 评测方式: remote|local
+  status: ""                # 评测状态: S|F|C|OOR|running|local
+  results: {}               # 最终评测结果
+
+# ============================================================================
+# 算子替换信息 (由 operator-replacement 写入)
+# ============================================================================
+operator_replacement:
+  replaced_operators: []    # 已替换/排除的算子列表
+  replacement_mode: ""      # unused | enable | config
+  final_gems_txt: ""        # 最终 gems.txt 内容/路径
+
+# ============================================================================
+# 组件升级信息 (由 flag-upgrade 写入)
+# ============================================================================
+flag_upgrade:
+  upgraded_packages: []     # 升级的包列表
+  timestamp: ""             # 升级时间
 
 # ============================================================================
 # 元数据

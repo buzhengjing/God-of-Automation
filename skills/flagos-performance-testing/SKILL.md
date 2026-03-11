@@ -1,5 +1,5 @@
 ---
-name: performance-testing
+name: flagos-performance-testing
 description: vLLM 模型性能基准测试工具
 version: 2.1.0
 triggers:
@@ -9,7 +9,7 @@ triggers:
   - 吞吐量测试
 depends_on:
   - flagos-eval-correctness
-next_skill: flagos-release
+next_skill: null
 ---
 
 # 性能测试 Skill

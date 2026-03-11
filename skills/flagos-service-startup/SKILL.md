@@ -1,7 +1,7 @@
 ---
 name: flagos-service-startup
-description: 启动模型推理服务，验证运行时环境，并验证服务健康状态
-version: 1.1.0
+description: 在容器内启动推理服务、验证服务健康状态，并检查 gems.txt 算子列表
+version: 2.0.0
 license: internal
 triggers:
   - service startup
@@ -10,7 +10,7 @@ triggers:
   - health check
   - 健康检查
 depends_on:
-  - flagos-environment-preparation
+  - flagos-pre-service-inspection
 next_skill: flagos-eval-correctness
 provides:
   - service.host
@@ -18,13 +18,18 @@ provides:
   - service.process_id
   - service.healthy
   - service.model_id
+  - service.log_path
+  - service.gems_txt_path
+  - service.initial_operator_list
   - runtime.gpu_count
   - runtime.flaggems_enabled
 ---
 
 # 服务启动 Skill
 
-此 Skill 在运行的容器内启动推理服务，验证运行时环境，并验证服务健康状态。
+此 Skill 在容器内生成并执行服务启动命令、验证服务健康状态，并在启动后检查 gems.txt 获取初始算子列表。
+
+**前提条件**：已完成 `flagos-pre-service-inspection` 环境检查。
 
 ---
 
@@ -60,20 +65,23 @@ tail -f /data/flagos-workspace/<model_name>/output/**/*.log
 
 ```yaml
 container:
-  name: <来自 environment-preparation>
+  name: <来自 container-preparation>
 model:
-  name: <来自 model-introspection>
-  local_path: <来自 environment-preparation>
-  container_path: <来自 environment-preparation>
+  name: <来自 container-preparation>
+  url: <来自 container-preparation>
+  container_path: <来自 container-preparation>
 workspace:
-  host_path: <来自 environment-preparation>
+  host_path: <来自 container-preparation>
   container_path: "/flagos-workspace"
-runtime:
-  framework: <来自 model-introspection>
 gpu:
-  vendor: <来自 environment-preparation>
-  count: <来自 environment-preparation>
-  visible_devices_env: <来自 environment-preparation>
+  vendor: <来自 container-preparation>
+  count: <来自 container-preparation>
+  visible_devices_env: <来自 container-preparation>
+inspection:
+  core_packages: <来自 pre-service-inspection>
+  flag_packages: <来自 pre-service-inspection>
+  flaggems_control: <来自 pre-service-inspection>
+  env_vars: <来自 pre-service-inspection>
 ```
 
 ## 写入 shared/context.yaml
@@ -85,7 +93,9 @@ service:
   process_id: <运行中服务的 PID>
   healthy: <true|false>
   model_id: <API 响应中的模型标识符>
-  log_path: <服务日志路径，如 /flagos-workspace/output/.../serve/*.log>
+  log_path: <服务日志路径>
+  gems_txt_path: <gems.txt 文件路径>
+  initial_operator_list: [...]
 runtime:
   gpu_count: <可见 GPU 数量>
   flaggems_enabled: <true|false>
@@ -95,143 +105,11 @@ runtime:
 
 # 工作流程
 
-## 阶段一：环境检查（启动前）
+## 阶段一：生成并执行启动命令
 
-### 步骤 1 — 进入容器
+### 步骤 1 — 确定启动命令
 
-```bash
-docker exec -it <container_name> /bin/bash
-```
-
-结果反馈：
-
-- 成功进入容器
-
----
-
-### 步骤 2 — 检查 GPU
-
-根据 context.yaml 中的 `gpu.vendor` 使用对应检测命令：
-
-| 厂商 | 检测命令 |
-|------|----------|
-| NVIDIA | `nvidia-smi` |
-| 华为 (Ascend) | `npu-smi info` |
-| 海光 (Hygon) | `hy-smi` |
-| 摩尔线程 | `mthreads-gmi` |
-| 昆仑芯 | `xpu-smi` |
-| 天数 | `ixsmi` |
-| 沐曦 | `mx-smi` |
-| 清微智能 | `tsm_smi` 或 `source /root/.bash_profile && tsm_smi -t` |
-| 寒武纪 | `cnmon` |
-
-示例（NVIDIA）：
-
-```bash
-nvidia-smi
-```
-
-示例（华为）：
-
-```bash
-npu-smi info
-```
-
-结果反馈：
-
-- GPU 厂商
-- GPU 可见性
-- GPU 数量
-- 显存大小
-
----
-
-### 步骤 3 — 检查运行时环境
-
-检查关键软件包版本：
-
-```bash
-pip show torch vllm sglang flag-gems 2>/dev/null | grep -E "^(Name|Version):"
-```
-
-或详细列表：
-
-```bash
-pip list | grep -iE "(torch|vllm|sglang|flag|gems)"
-```
-
-重要软件包：
-
-- torch
-- vllm / sglang
-- flag-gems
-
-结果反馈：
-
-- 软件包版本列表
-
----
-
-### 步骤 4 — 检测 FlagGems 集成状态
-
-**此步骤必须在启动服务前完成，决定是否启用算子替换。**
-
-检测方法：
-
-1. 检查 flag-gems 是否安装：
-
-```bash
-pip show flag_gems
-```
-
-2. 检查 vLLM/SGLang 是否集成了 FlagGems：
-
-```bash
-# 获取 vllm 安装路径
-VLLM_PATH=$(pip show vllm | grep Location | cut -d' ' -f2)/vllm
-
-# 搜索 gems 相关代码
-grep -r "flag_gems\|gems" $VLLM_PATH --include="*.py" | head -20
-```
-
-3. 检查环境变量配置：
-
-```bash
-echo $USE_FLAGGEMS
-```
-
-结果反馈：
-
-- FlagGems 安装状态：已安装 / 未安装
-- 框架集成状态：已集成 / 未集成
-- 建议：是否启用 FlagGems 算子替换
-
----
-
-### 步骤 5 — 询问用户是否启用 FlagGems
-
-根据步骤 4 的检测结果，询问用户：
-
-**如果检测到 FlagGems 可用：**
-
-"检测到 FlagGems 已集成，是否启用算子替换？"
-
-选项：
-1. 启用 FlagGems（推荐）
-2. 不启用 FlagGems
-3. 用户自定义配置
-
-**如果未检测到 FlagGems：**
-
-告知用户 FlagGems 不可用，将使用原生算子。
-
----
-
-## 阶段二：生成并执行启动命令
-
-### 步骤 6 — 确定启动命令
-
-根据前面的检测结果、GPU 厂商和用户选择，生成启动命令。
+根据 `inspection` 中的环境检查结果、GPU 厂商和用户选择，生成启动命令。
 
 ### 环境变量设置
 
@@ -286,7 +164,7 @@ USE_FLAGGEMS=1 <VISIBLE_DEVICES_ENV>=0,1,2,3 python -m sglang.launch_server \
 
 ---
 
-### 步骤 7 — 执行启动命令
+### 步骤 2 — 执行启动命令
 
 **重要**：必须先 `cd` 到工作目录，确保 `output/` 日志目录生成在挂载路径下。
 
@@ -321,12 +199,12 @@ tail -f /data/flagos-workspace/<model_name>/output/**/*.log
 
 ---
 
-## 阶段三：服务验证（启动后）
+## 阶段二：服务验证
 
-### 步骤 8 — 检查进程状态
+### 步骤 3 — 检查进程状态
 
 ```bash
-ps -ef | grep -E "vllm|sglang" | grep -v grep
+docker exec <container_name> ps -ef | grep -E "vllm|sglang" | grep -v grep
 ```
 
 结果反馈：
@@ -336,7 +214,7 @@ ps -ef | grep -E "vllm|sglang" | grep -v grep
 
 ---
 
-### 步骤 9 — 查询模型 API
+### 步骤 4 — 查询模型 API
 
 等待服务完全启动后，查询模型列表：
 
@@ -351,7 +229,7 @@ curl -s http://localhost:8000/v1/models | jq .
 
 ---
 
-### 步骤 10 — 运行推理测试
+### 步骤 5 — 运行推理测试
 
 发送简单推理请求验证服务：
 
@@ -372,7 +250,7 @@ curl -s http://localhost:8000/v1/chat/completions \
 
 ---
 
-### 步骤 11 — 验证 FlagGems 执行（如已启用）
+### 步骤 6 — 验证 FlagGems 执行（如已启用）
 
 如果启用了 FlagGems，**在宿主机**检查日志确认算子替换生效：
 
@@ -395,19 +273,47 @@ GEMS RECIPROCAL
 
 ---
 
+## 阶段三：检查 gems.txt（启动后）
+
+### 步骤 7 — 查找并读取 gems.txt
+
+服务启动后，FlagGems 会生成 gems.txt 文件，记录实际使用的算子列表。
+
+```bash
+# 在容器内查找 gems.txt
+docker exec <container_name> find / -name "gems.txt" 2>/dev/null
+
+# 查看内容
+docker exec <container_name> cat <gems_txt_path>
+```
+
+记录初始算子列表，为后续算子替换工作提供依据。
+
+结果反馈：
+
+- gems.txt 文件路径
+- 初始算子列表
+
+---
+
+### 步骤 8 — 写入 context.yaml
+
+将服务信息和 gems.txt 结果写入 context.yaml。
+
+---
+
 # 完成条件
 
 服务启动成功的标志：
 
-- GPU 可见且数量正确
-- 运行时环境已验证
-- FlagGems 状态已确认（启用/禁用）
 - 服务进程正在运行
 - **日志文件已生成在 `/flagos-workspace/output/` 目录**
 - **宿主机可直接访问日志文件**
 - API /v1/models 可访问
 - 推理测试通过
 - （如启用）FlagGems 算子替换已生效
+- **gems.txt 已检查，初始算子列表已记录**
+- context.yaml 已更新
 
 ---
 
@@ -423,3 +329,4 @@ GEMS RECIPROCAL
 | API 无响应 | 端口被占用 | 检查 `lsof -i:8000` 并更换端口 |
 | FlagGems 未生效 | 环境变量未设置 | 确认 `USE_FLAGGEMS=1` |
 | 模型加载失败 | 路径错误 | 检查模型路径是否正确挂载 |
+| gems.txt 未生成 | FlagGems 未启用或版本不支持 | 确认 FlagGems 已启用，检查版本 |
