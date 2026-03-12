@@ -1,7 +1,7 @@
 ---
 name: flagos-eval-correctness
-description: 自动化大模型正确性评测，优先使用远端 FlagEval 平台 API，支持错误自动分析、算子替换重试和本地评测降级
-version: 3.0.0
+description: 自动化大模型正确性评测，优先使用远端 FlagEval 平台 API，支持错误自动分析、算子替换重试和本地评测降级。集成到双场景流程中作为可选步骤。
+version: 3.1.0
 triggers:
   - 精度评测
   - 正确性评测
@@ -22,6 +22,15 @@ provides:
 # FlagOS 正确性评测 Skill
 
 自动化评测大模型正确性，**优先通过远端 FlagEval 平台 API 提交评测任务**。
+
+**在双场景流程中的位置**：
+- **Scenario A**：步骤⑧，可选步骤（默认跳过，用户可提前指定执行）
+- **Scenario B**：步骤⑦，可选步骤
+
+**自动化行为**：
+- 默认跳过精度评测（除非用户明确要求）
+- 如果在流程开始时用户指定了要做精度评测，则自动执行
+- 支持 `${CMD_PREFIX}` 双执行模式
 
 支持完整的错误处理闭环：
 - 服务端报错（算子问题）→ 自动关闭问题算子 → 重启服务 → 重新提交评测
@@ -95,6 +104,8 @@ model:
   url: <来自 container-preparation>
   container_path: <来自 container-preparation>
 service:
+  cluster: <来自 service-startup>      # 用于判断远端评测可达性
+  external_ip: <来自 service-startup>  # 用于构建 eval_url
   host: <来自 service-startup>
   port: <来自 service-startup>
   healthy: <来自 service-startup>
@@ -197,7 +208,7 @@ ERQA 具身推理评测脚本。加载 Parquet 多模态数据，调用视觉语
 |------|------|------|
 | `eval_model` | 用户提供 | 评测唯一名称，如 `qwen2.5-7b-nv-flagos` |
 | `model` | context.yaml `model.name` 或 `model.container_path` | 大模型名称（与部署一致） |
-| `eval_url` | context.yaml `service.host`:`service.port` | 服务评测接口，如 `http://<ip>:8000/v1/chat/completions` |
+| `eval_url` | context.yaml `service.external_ip`:`service.port` | 服务评测接口，如 `http://<external_ip>:8000/v1/chat/completions`。**必须使用 `external_ip`（非 localhost）**，否则远端评测平台无法访问 |
 | `tokenizer` | 用户提供 | Tokenizer 路径，如 `Qwen/Qwen2.5-7B-Instruct` |
 | `domain` | 用户选择 | `NLP`（语言模型）或 `MM`（多模态） |
 | `mode` | 用户选择 | NLP: `FlagRelease`/`XLC_train`/`XLC_infer`/`Qnext`/`quickrun`；MM: `FlagRelease`/`XLC`/`EmbodiedVerse`/`RoboTrain`/`quickrun` |

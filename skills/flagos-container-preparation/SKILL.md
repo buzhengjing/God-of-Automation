@@ -1,7 +1,7 @@
 ---
 name: flagos-container-preparation
-description: 容器启动前准备，包括 GPU 检测、主机环境验证、Docker 容器创建（前提：已有可用镜像）
-version: 2.0.0
+description: 多入口容器准备，支持已有容器/已有镜像/README 解析三种入口，自动识别用户输入类型
+version: 3.0.0
 license: internal
 triggers:
   - container preparation
@@ -22,13 +22,13 @@ provides:
   - gpu.count
   - workspace.host_path
   - workspace.container_path
+  - entry.type
+  - entry.source
 ---
 
-# 容器启动前准备 Skill
+# 容器准备 Skill（多入口）
 
-此 Skill 为"已有可用镜像/容器"场景设计，接收用户直接提供的模型名、模型 URL 和镜像地址，完成 GPU 检测、主机环境验证和容器创建。
-
-**前提条件**：用户已有可用的 Docker 镜像（无需从 README 解析或下载模型）。
+此 Skill 支持三种入口场景，自动识别用户输入类型，减少人机交互。
 
 支持多厂商 GPU：NVIDIA、华为、海光、摩尔线程、昆仑芯、天数、沐曦、清微智能、寒武纪、平头哥。
 
@@ -46,25 +46,32 @@ provides:
 容器内: /flagos-workspace/
 ```
 
-## 目录结构（服务启动后自动生成）
+## 目录结构
 
 ```
 /flagos-workspace/
-├── output/                    # 服务启动后自动生成的日志目录
-│   └── <服务名>/
-│       └── serve/
-│           └── *.log          # 服务日志
-│
+├── scripts/                   # 自动化脚本
+│   ├── benchmark_runner.py
+│   ├── performance_compare.py
+│   └── operator_optimizer.py
+├── logs/                      # 操作日志
+├── results/                   # 性能数据
+│   ├── native_performance.json
+│   ├── flagos_initial.json
+│   ├── flagos_optimized.json
+│   ├── operator_config.json
+│   ├── performance_compare.csv
+│   ├── flagos_before_upgrade.json   # Scenario B only
+│   └── flagos_after_upgrade.json    # Scenario B only
+├── reports/                   # 报告
+│   ├── env_report.md
+│   ├── flag_gems_detection.md
+│   └── final_report.md
+├── output/                    # 服务日志
 ├── eval/                      # 评测结果
-│   ├── aime_result.json
-│   ├── erqa_result.json
-│   └── *.log
-│
-├── perf/                      # 性能测试结果
-│   └── benchmark_*.json
-│
+├── perf/                      # 兼容旧性能测试
 └── shared/
-    └── context.yaml           # 共享上下文
+    └── context.yaml
 ```
 
 ---
@@ -73,17 +80,21 @@ provides:
 
 ## 读取
 
-无（流程起点）。用户直接提供以下输入：
+无（流程起点）。用户提供以下任意一种输入：
 
-| 输入 | 说明 |
-|------|------|
-| 模型名 | 模型标识名，如 `Qwen2.5-7B-Instruct` |
-| 模型 URL | 模型在容器内或宿主机上的路径 |
-| 镜像地址 | Docker 镜像地址，如 `harbor.baai.ac.cn/...` |
+| 入口 | 用户提供什么 | 系统做什么 |
+|------|-------------|-----------|
+| **已有容器** | 容器名称（或容器 ID） | 跳过创建，直接验证容器状态、GPU、挂载目录 |
+| **已有镜像** | 镜像地址 + 模型名 + 模型路径 | docker run 创建容器 |
+| **README 链接** | ModelScope/HuggingFace URL | WebFetch 解析 → 提取镜像/命令 → docker pull → docker run |
 
 ## 写入 shared/context.yaml
 
 ```yaml
+entry:
+  type: "<existing_container|new_container|readme_parse>"
+  source: "<用户原始输入>"
+
 model:
   name: "<模型名称>"
   url: "<用户提供的模型 URL>"
@@ -91,7 +102,7 @@ model:
   container_path: "<模型在容器内的路径>"
 
 container:
-  name: "<创建的容器名称>"
+  name: "<容器名称>"
   status: "running"
 
 image:
@@ -117,46 +128,97 @@ metadata:
 
 # 工作流程
 
-## 步骤 1 — 接收用户输入
+## 步骤 0 — 自动识别入口类型
 
-询问用户提供以下信息：
-
-- **模型名**：模型标识名（如 `Qwen2.5-7B-Instruct`）
-- **模型 URL**：模型路径（宿主机或容器内）
-- **镜像地址**：Docker 镜像完整地址
-
-示例：
+根据用户输入自动判断入口类型（减少交互）：
 
 ```
-模型名: Qwen2.5-7B-Instruct
-模型 URL: /data/models/Qwen2.5-7B-Instruct
-镜像地址: harbor.baai.ac.cn/flagrelease-public/flagos-vllm:latest
+用户输入
+  │
+  ├── 输入看起来像容器名/ID → 自动尝试 docker inspect
+  │   ├── 容器存在且运行中 → 入口1：已有容器
+  │   ├── 容器存在但停止 → 自动 docker start → 入口1
+  │   └── 不存在 → 提示用户确认
+  │
+  ├── 输入看起来像镜像地址 (含 registry/tag) → 入口2：已有镜像
+  │   └── 自动询问模型名和路径（仅这两项）
+  │
+  └── 输入看起来像 URL (http/https) → 入口3：README 解析
+      └── 自动 WebFetch → 提取所有信息 → 确认后执行
 ```
+
+**判断规则**：
+- 包含 `http://` 或 `https://` → URL
+- 包含 `/` 和 `:` 且像 registry 地址（如 `harbor.xxx/path:tag`）→ 镜像
+- 其他字符串 → 尝试作为容器名
 
 ---
 
-## 步骤 2 — 检测 GPU 厂商和状态
+## 入口 1 — 已有容器（新增）
 
-依次尝试各厂商的检测命令，确定 GPU 类型：
-
-### GPU 检测命令表
-
-| 厂商 | 检测命令 | 备注 |
-|------|----------|------|
-| NVIDIA | `nvidia-smi` | 最常见 |
-| 华为 (Ascend) | `npu-smi info` | NPU |
-| 海光 (Hygon) | `hy-smi` 或 `hy-smi --showpids` | DCU |
-| 摩尔线程 | `mthreads-gmi` | MTT GPU |
-| 昆仑芯 | `xpu-smi` | XPU |
-| 天数 | `ixsmi` | |
-| 沐曦 | `mx-smi` | |
-| 清微智能 | `tsm_smi` 或 `source /root/.bash_profile && tsm_smi -t` | 可能需要 source 环境 |
-| 寒武纪 | `cnmon` | MLU |
-
-检测脚本示例：
+### 步骤 1.1 — 验证容器状态
 
 ```bash
-# 自动检测 GPU 厂商
+# 验证容器存在和状态
+docker inspect <container_name> --format '{{.State.Status}}'
+
+# 如果停止则启动
+docker start <container_name>
+```
+
+### 步骤 1.2 — 自动检测 GPU（在容器内）
+
+```bash
+docker exec <container_name> bash -c "
+  for cmd in nvidia-smi npu-smi hy-smi mthreads-gmi xpu-smi ixsmi mx-smi tsm_smi cnmon; do
+    if command -v \$cmd &>/dev/null; then echo GPU_CMD=\$cmd; \$cmd; break; fi
+  done
+"
+```
+
+### 步骤 1.3 — 自动检测模型路径（常见挂载点扫描）
+
+```bash
+docker exec <container_name> bash -c "
+  for dir in /data/models /models /workspace/models /mnt/models /flagos-workspace; do
+    if [ -d \"\$dir\" ]; then echo \"FOUND: \$dir\"; ls \$dir 2>/dev/null; fi
+  done
+"
+```
+
+### 步骤 1.4 — 检测/创建工作目录
+
+```bash
+docker exec <container_name> bash -c "
+  mkdir -p /flagos-workspace/{scripts,logs,results,reports,eval,shared,output,perf}
+"
+```
+
+**关键**：已有容器可能没有 `/flagos-workspace` 挂载。如果没有：
+- 在容器内直接创建 `/flagos-workspace` 目录（数据不会映射到宿主机，但流程能跑）
+- 提醒用户如需宿主机访问，建议重建容器时加挂载
+
+### 步骤 1.5 — 推导模型信息
+
+从容器环境推导模型名和路径：
+- 检查运行中的服务进程命令行参数
+- 扫描常见模型目录
+- 必要时询问用户确认
+
+---
+
+## 入口 2 — 已有镜像（现有流程优化）
+
+### 步骤 2.1 — 接收用户输入
+
+仅需要以下信息（自动检测的不问）：
+- **镜像地址**：用户已提供
+- **模型名**：询问用户
+- **模型路径**：询问用户（宿主机路径）
+
+### 步骤 2.2 — 自动检测 GPU 厂商（宿主机）
+
+```bash
 detect_gpu() {
     if command -v nvidia-smi &> /dev/null && nvidia-smi &> /dev/null; then
         echo "nvidia"
@@ -180,74 +242,41 @@ detect_gpu() {
         echo "unknown"
     fi
 }
-
-GPU_VENDOR=$(detect_gpu)
-echo "检测到 GPU 厂商: $GPU_VENDOR"
 ```
 
-### 指定卡的环境变量
+### GPU 检测命令表
 
-| 厂商 | 环境变量 |
-|------|----------|
-| NVIDIA | `CUDA_VISIBLE_DEVICES` |
-| 华为 | `ASCEND_RT_VISIBLE_DEVICES` |
-| 海光 | `HIP_VISIBLE_DEVICES` |
-| 摩尔线程 | `MUSA_VISIBLE_DEVICES` |
-| 昆仑芯 | `XPU_VISIBLE_DEVICES` |
-| 天数 | `CUDA_VISIBLE_DEVICES` |
-| 沐曦 | `CUDA_VISIBLE_DEVICES` |
-| 清微智能 | `TXDA_VISIBLE_DEVICES` |
-| 寒武纪 | `MLU_VISIBLE_DEVICES` |
-| 平头哥 | `CUDA_VISIBLE_DEVICES` |
+| 厂商 | 检测命令 | 可见设备环境变量 |
+|------|----------|------------------|
+| NVIDIA | `nvidia-smi` | `CUDA_VISIBLE_DEVICES` |
+| 华为 (Ascend) | `npu-smi info` | `ASCEND_RT_VISIBLE_DEVICES` |
+| 海光 (Hygon) | `hy-smi` | `HIP_VISIBLE_DEVICES` |
+| 摩尔线程 | `mthreads-gmi` | `MUSA_VISIBLE_DEVICES` |
+| 昆仑芯 | `xpu-smi` | `XPU_VISIBLE_DEVICES` |
+| 天数 | `ixsmi` | `CUDA_VISIBLE_DEVICES` |
+| 沐曦 | `mx-smi` | `CUDA_VISIBLE_DEVICES` |
+| 清微智能 | `tsm_smi` | `TXDA_VISIBLE_DEVICES` |
+| 寒武纪 | `cnmon` | `MLU_VISIBLE_DEVICES` |
+| 平头哥 | - | `CUDA_VISIBLE_DEVICES` |
 
-结果反馈：
-
-- GPU 厂商
-- GPU 型号
-- GPU 数量
-- 显存大小
-
----
-
-## 步骤 3 — 验证主机基础环境
+### 步骤 2.3 — 验证主机基础环境
 
 ```bash
-# 检查 Docker
 docker --version
-
-# 检查磁盘空间
 df -h /data
-
-# 检查内存
 free -h
 ```
 
-结果反馈：
-
-- Docker 版本
-- 可用磁盘空间
-- 可用内存
-
-如果环境检查失败，提示用户解决后再继续。
-
----
-
-## 步骤 4 — 创建宿主机工作目录
+### 步骤 2.4 — 创建宿主机工作目录
 
 ```bash
-# 创建工作目录结构
 WORKSPACE_HOST="/data/flagos-workspace/<model_name>"
-mkdir -p ${WORKSPACE_HOST}/{eval,perf,shared}
-
-# 验证目录创建成功
-ls -la ${WORKSPACE_HOST}
+mkdir -p ${WORKSPACE_HOST}/{scripts,logs,results,reports,eval,perf,shared}
 ```
 
----
+### 步骤 2.5 — 生成并执行 docker run 命令
 
-## 步骤 5 — 生成并执行 docker run 命令
-
-根据 GPU 厂商生成对应的 docker run 命令。
+自动生成容器名：`<model_name>_flagos`
 
 **NVIDIA：**
 ```bash
@@ -294,71 +323,48 @@ docker run -itd \
   /bin/bash
 ```
 
-参数说明：
+**向用户展示生成的命令，确认后执行。**（唯一需要人工确认的步骤）
 
-| 参数 | 说明 |
-|------|------|
-| `--gpus all` | NVIDIA GPU（其他厂商使用 --privileged 或指定设备） |
-| `--shm-size 32g` | 共享内存大小，大模型需要 |
-| `--ulimit memlock=-1` | 解除内存锁定限制 |
-| `-v <model>` | 挂载模型目录 |
-| `-v <workspace>` | **挂载工作目录（日志、评测、性能测试结果）** |
-| `-p 8000:8000` | 端口映射 |
-| `-itd` | 交互式后台运行 |
-
-容器命名建议：
-
-```
-<model_name>_flagos
-例如: qwen2.5-7b_flagos
-```
-
-向用户展示生成的命令，确认后执行。
-
----
-
-## 步骤 6 — 验证容器状态
+### 步骤 2.6 — 验证容器状态
 
 ```bash
-# 检查容器运行状态
 docker ps | grep <container_name>
-
-# 检查容器内 GPU（根据厂商选择命令）
 docker exec <container_name> <gpu_check_command>
-
-# 检查模型挂载
 docker exec <container_name> ls -la <container_model_path>
-
-# 检查工作目录挂载
 docker exec <container_name> ls -la /flagos-workspace
 ```
 
-GPU 检查命令根据厂商：
+---
 
-| 厂商 | 容器内检查命令 |
-|------|----------------|
-| NVIDIA | `nvidia-smi` |
-| 华为 | `npu-smi info` |
-| 海光 | `hy-smi` |
-| 摩尔线程 | `mthreads-gmi` |
-| 昆仑芯 | `xpu-smi` |
-| 天数 | `ixsmi` |
-| 沐曦 | `mx-smi` |
-| 清微智能 | `tsm_smi` |
-| 寒武纪 | `cnmon` |
+## 入口 3 — README 解析（主要用于 Scenario B）
 
-结果反馈：
+### 步骤 3.1 — WebFetch 解析 URL
 
-- 容器状态（运行中/已停止）
-- 容器内 GPU 可见性
-- 模型目录挂载状态
-- **工作目录挂载状态**
+```
+使用 WebFetch 获取 URL 内容，提取：
+- Docker 镜像地址
+- 启动命令
+- 模型名称
+- 依赖信息
+```
+
+### 步骤 3.2 — docker pull
+
+```bash
+docker pull <extracted_image>
+```
+
+### 步骤 3.3 — 按入口 2 的流程创建容器
+
+使用从 README 提取的信息，执行入口 2 的步骤 2.3 ~ 2.6。
+
+**失败时才交互**：README 解析失败或信息不全时，再询问用户补充。
 
 ---
 
 ## 步骤 7 — 写入 context.yaml
 
-将所有检测和创建结果写入 `shared/context.yaml`。
+将所有检测和创建结果写入 `shared/context.yaml`，包括新增的 `entry` 字段。
 
 ---
 
@@ -366,15 +372,13 @@ GPU 检查命令根据厂商：
 
 容器准备成功的标志：
 
-- 用户输入已确认（模型名、模型 URL、镜像地址）
+- 入口类型已自动识别并记录
 - GPU 厂商已识别
-- 主机环境验证通过
-- 宿主机工作目录已创建
-- Docker 容器已创建并运行
+- Docker 容器已运行（新建或已有）
 - 容器内 GPU 可见
-- 模型目录已正确挂载
-- **工作目录 `/flagos-workspace` 已正确挂载**
-- context.yaml 已更新
+- 模型目录已确认
+- **工作目录 `/flagos-workspace` 可用**（挂载或容器内创建）
+- context.yaml 已更新（含 entry 字段）
 
 ---
 
@@ -387,5 +391,8 @@ GPU 检查命令根据厂商：
 | 容器启动失败 | 检查 GPU 驱动兼容性，查看 `docker logs` |
 | 模型目录为空 | 确认挂载路径正确，检查权限 |
 | 容器内 GPU 不可见 | NVIDIA 检查 `--gpus all`；其他厂商检查设备挂载 |
+| 已有容器无 /flagos-workspace | 在容器内创建目录，提醒用户数据不映射到宿主机 |
+| docker inspect 失败 | 容器名/ID 不正确，提示用户确认 |
+| README 解析失败 | 要求用户手动提供镜像地址和模型信息 |
 
 下一步应执行 **flagos-pre-service-inspection**。

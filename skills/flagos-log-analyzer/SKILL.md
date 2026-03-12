@@ -1,7 +1,7 @@
 ---
 name: flagos-log-analyzer
-description: 分析推理服务日志以诊断启动失败、运行时错误、GPU 问题或 FlagGems 集成问题
-version: 1.1.0
+description: 分析推理服务日志以诊断启动失败、运行时错误、GPU 问题或 FlagGems 集成问题，提供失败恢复指引
+version: 2.0.0
 license: internal
 triggers:
   - log analysis
@@ -16,7 +16,9 @@ provides:
 
 # 日志分析 Skill
 
-此 Skill 分析推理服务生成的日志，以识别部署或运行时问题。
+此 Skill 分析推理服务生成的日志，以识别部署或运行时问题，并提供恢复指引。
+
+支持 `${CMD_PREFIX}` 双执行模式（宿主机或容器内）。
 
 典型日志包括：
 
@@ -214,3 +216,44 @@ FlagGems 未启用
 - 错误已分类
 - 诊断已生成
 - 可能的解决方案已建议
+
+---
+
+# 失败恢复指引
+
+## 服务启动失败
+
+```
+诊断: 启动失败
+  │
+  ├── FlagOS 模式失败
+  │   → 保存日志到 /flagos-workspace/logs/
+  │   → 自动切回 Native 模式验证
+  │   │
+  │   ├── Native 也失败 → 环境问题，需人工介入
+  │   └── Native 成功 → FlagGems 问题，触发算子优化
+  │
+  └── Native 模式失败
+      → 检查 GPU 驱动、显存、模型路径
+      → 建议调整 tensor-parallel-size
+```
+
+## Benchmark 失败
+
+```
+诊断: Benchmark 失败
+  │
+  ├── 单次失败 → 自动重试 1 次
+  ├── 重试后仍失败 → 跳过当前 case，继续下一个
+  └── 服务在测试中挂掉 → 重启服务 → 从失败的 case 继续
+```
+
+## 算子优化中途失败
+
+```
+诊断: 优化中断
+  │
+  ├── 进度已自动保存到 operator_config.json
+  ├── 恢复上一个可用配置
+  └── 支持断点继续：operator_optimizer.py next
+```
