@@ -156,3 +156,32 @@ bash skills/flagos-container-preparation/tools/setup_workspace.sh $CONTAINER
 2. **FlagGems 开关只能通过 `toggle_flaggems.py` 切换**，禁止手动 sed
 3. **所有操作在 `/flagos-workspace` 目录下执行**，确保日志可从宿主机访问
 4. **context.yaml 是 Skill 间共享状态**，每个 Skill 完成后必须更新
+
+---
+
+## 首次使用：权限预配置
+
+项目根目录下的 `settings.local.json` 是 Claude Code 的权限预批准配置，可免去执行 `docker exec`、`curl` 等命令时的反复确认。
+
+**首次使用本项目时，需手动复制到 Claude Code 配置目录：**
+
+```bash
+# 复制到项目级 Claude Code 配置目录
+mkdir -p .claude
+cp settings.local.json .claude/settings.local.json
+```
+
+此文件预批准了以下安全操作，无需每次确认：
+- 容器操作：`docker exec`、`docker cp`、`docker inspect`、`docker ps`、`docker start`、`docker logs`
+- 健康检查：`curl -s http://localhost:*`
+- 宿主机只读：`nvidia-smi`、`npu-smi`、`hostname`、`df`、`free`
+- 工作目录：`/data/flagos-workspace/` 下的 mkdir、ls、cat、tail、find
+- Git 操作：`git clone`
+- 文件操作：`cp`、`ln -s`
+
+**保留需要用户确认的危险操作**（不在预批准列表中）：
+- `docker run` — 创建容器
+- `docker pull` — 下载镜像
+- `pip install/uninstall` — 改变容器环境
+- `pkill` — 杀进程
+- `modelscope download` — 大量下载
