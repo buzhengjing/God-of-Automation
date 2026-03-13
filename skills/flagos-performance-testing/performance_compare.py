@@ -205,6 +205,76 @@ def check_target(rows: List[Dict[str, Any]], benchmark_names: List[str],
     return result
 
 
+def shorten_test_case(name: str) -> str:
+    """将测试用例名转为简写格式: 1k_input_1k_output → 1k→1k"""
+    m = __import__('re').match(r'(\d+k?)_input_(\d+k?)_output', name)
+    if m:
+        return f"{m.group(1)}\u2192{m.group(2)}"
+    return name
+
+
+def print_markdown_table(rows: List[Dict[str, Any]], benchmark_names: List[str]):
+    """打印标准 markdown 格式的性能对比表格"""
+
+    # 确定列名映射
+    display_names = {
+        "native": "Native TPS",
+        "flagos_initial": "FlagOS Initial TPS",
+        "flagos_optimized": "FlagOS Optimized TPS",
+        "flagos_before_upgrade": "FlagOS Before TPS",
+        "flagos_after_upgrade": "FlagOS After TPS",
+    }
+
+    # 构建表头
+    headers = ["Test Case"]
+    for name in benchmark_names:
+        headers.append(display_names.get(name, name + " TPS"))
+        if name != "native":
+            headers.append("Ratio")
+    headers.append("Best Concurrency")
+
+    # 打印表头
+    print("| " + " | ".join(headers) + " |")
+    print("| " + " | ".join(["-" * max(len(h), 5) for h in headers]) + " |")
+
+    # 数据行
+    for row in rows:
+        tc = shorten_test_case(row["test_case"])
+        cells = [tc]
+
+        # 找最优并发（取 native 的）
+        best_conc = ""
+
+        for name in benchmark_names:
+            total_tp = row.get(f"{name}_total_throughput", 0)
+            cells.append(str(int(round(total_tp))) if total_tp else "0")
+
+            if name != "native":
+                ratio = row.get(f"{name}_ratio", 0)
+                cells.append(f"**{ratio*100:.1f}%**" if ratio else "N/A")
+
+            if name == "native":
+                bc = row.get(f"{name}_best_concurrency", "")
+                if bc:
+                    best_conc = bc.replace("concurrency_", "")
+
+        cells.append(best_conc)
+        print("| " + " | ".join(cells) + " |")
+
+    # 打印汇总
+    print("")
+    for name in benchmark_names:
+        if name == "native":
+            continue
+        ratios = [row.get(f"{name}_ratio", 0) for row in rows if row.get(f"{name}_ratio")]
+        if ratios:
+            avg_ratio = sum(ratios) / len(ratios)
+            min_ratio = min(ratios)
+            status = "PASS" if min_ratio >= 0.8 else "FAIL"
+            dn = display_names.get(name, name)
+            print(f"{dn}: avg_ratio={avg_ratio*100:.1f}%, min_ratio={min_ratio*100:.1f}% [{status}]")
+
+
 def main():
     parser = argparse.ArgumentParser(description="性能对比工具")
     parser.add_argument("--native", required=True, help="原生性能结果 JSON 路径")
@@ -214,6 +284,8 @@ def main():
     parser.add_argument("--flagos-after", help="FlagOS 升级后性能结果 JSON 路径 (Scenario B)")
     parser.add_argument("--output", default="./performance_compare.csv", help="CSV 输出路径")
     parser.add_argument("--target-ratio", type=float, default=0.8, help="性能目标比率 (默认 0.8)")
+    parser.add_argument("--format", choices=["text", "markdown"], default="text",
+                        help="输出格式: text(默认) 或 markdown")
     args = parser.parse_args()
 
     # 加载 benchmark 数据
@@ -247,7 +319,10 @@ def main():
     rows = compare_results(benchmarks)
 
     # 打印摘要
-    print_comparison(rows, benchmark_names)
+    if args.format == "markdown":
+        print_markdown_table(rows, benchmark_names)
+    else:
+        print_comparison(rows, benchmark_names)
 
     # 保存 CSV
     save_csv(rows, args.output, benchmark_names)

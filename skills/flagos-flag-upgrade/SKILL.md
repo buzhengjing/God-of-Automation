@@ -1,7 +1,7 @@
 ---
 name: flagos-flag-upgrade
-description: 升级 flag 生态组件（flaggems、flagscale、flagcx、vllm_plugin），支持 git 源码 + pip install。Scenario B 核心步骤。
-version: 2.0.0
+description: 升级 flag 生态组件，通过 upgrade_component.py 支持自动网络降级和构建依赖检查
+version: 3.0.0
 license: internal
 triggers:
   - flag upgrade
@@ -18,17 +18,16 @@ provides:
 
 # flag 组件升级 Skill
 
-独立工具，用于升级 flag 生态系统组件。
+通过 `upgrade_component.py` 自动化升级 flag 生态组件，支持网络检测和宿主机降级。
 
-**目标组件**：flaggems、flagscale、flagcx、vllm_plugin
+**工具脚本**: `skills/flagos-flag-upgrade/tools/upgrade_component.py`（已由 setup_workspace.sh 部署到容器）
 
-**注意**：在最新版本中，`vllm_plugin` 已替换了 `flagscale`。
+**默认仓库**（硬编码，无需用户提供）：
+- FlagGems: `https://github.com/FlagOpen/FlagGems.git`
+- FlagScale: `https://github.com/FlagOpen/FlagScale.git`
+- FlagCX: `https://github.com/FlagOpen/FlagCX.git`
 
-**升级方法**：git 源码 clone + pip install
-
-**在双场景流程中的位置**：
-- **Scenario A**：按需调用
-- **Scenario B**：步骤④，核心步骤（FlagGems 自动升级）
+**默认分支**: `main`（不询问用户）
 
 ---
 
@@ -40,7 +39,6 @@ provides:
 container:
   name: <来自 container-preparation>
 execution:
-  mode: <来自 pre-service-inspection>
   cmd_prefix: <来自 pre-service-inspection>
 inspection:
   flag_packages: <来自 pre-service-inspection>
@@ -65,162 +63,80 @@ flag_upgrade:
 ## 步骤 1 — 查看当前版本
 
 ```bash
-${CMD_PREFIX} pip show flag-gems flagscale flagcx vllm-plugin 2>/dev/null
+docker exec $CONTAINER pip show flag-gems flagscale flagcx 2>/dev/null
 ```
 
-结果反馈：
-
-| 组件 | 当前版本 | 安装状态 |
-|------|----------|----------|
-| flag-gems | x.x.x | 已安装/未安装 |
-| flagscale | x.x.x | 已安装/未安装 |
-| flagcx | x.x.x | 已安装/未安装 |
-| vllm-plugin | x.x.x | 已安装/未安装 |
-
----
-
-## 步骤 2 — 确定升级目标
-
-### Scenario A（按需调用）
-
-询问用户：
-- 升级哪些组件
-- 目标版本/分支
-- 仓库地址
-
-### Scenario B（自动升级流程）
-
-自动确定升级目标：
-- 从用户提供的仓库链接解析组件和版本
-- 或使用默认的最新 main 分支
-
----
-
-## 步骤 3 — 环境一致性检查（Scenario B 新增）
-
-升级前检查版本兼容性：
+## 步骤 2 — 停止服务（如在运行）
 
 ```bash
-${CMD_PREFIX} python3 -c "
-import torch, json
-info = {
-    'torch': torch.__version__,
-    'cuda': torch.version.cuda if hasattr(torch.version, 'cuda') else 'N/A',
+docker exec $CONTAINER bash -c "pkill -f 'vllm\|sglang\|flagscale' 2>/dev/null; sleep 3"
+```
+
+## 步骤 3 — 执行升级（容器内优先）
+
+```bash
+docker exec $CONTAINER python3 /flagos-workspace/scripts/upgrade_component.py \
+  --component flaggems --branch main --json
+```
+
+脚本自动完成：
+1. 检测容器网络连通性
+2. 网络可用 → 容器内直接 git clone + pip install
+3. 网络不可用 → 输出宿主机操作指令（JSON），Claude Code 在宿主机执行：
+   ```bash
+   cd /tmp && git clone --depth 1 --branch main https://github.com/FlagOpen/FlagGems.git
+   docker cp /tmp/FlagGems $CONTAINER:/tmp/FlagGems
+   docker exec $CONTAINER bash -c "cd /tmp/FlagGems && pip install ."
+   ```
+4. 预检并安装构建依赖（setuptools, scikit-build-core）
+5. 使用非 editable 模式：`pip install .`
+
+**如有代理**（从用户获取后传入）：
+```bash
+docker exec $CONTAINER python3 /flagos-workspace/scripts/upgrade_component.py \
+  --component flaggems --branch main --proxy http://10.8.36.21:17890 --json
+```
+
+## 步骤 4 — 验证升级
+
+```bash
+docker exec $CONTAINER pip show flag-gems
+```
+
+输出版本对比：
+```
+升级结果: flaggems 2.2 → 4.2.1rc0
+```
+
+## 步骤 5 — API 兼容性检查
+
+```bash
+docker exec $CONTAINER python3 -c "
+import flag_gems, inspect, json
+result = {
+    'version': flag_gems.__version__,
+    'has_enable': hasattr(flag_gems, 'enable'),
+    'has_only_enable': hasattr(flag_gems, 'only_enable'),
 }
-try:
-    import vllm
-    info['vllm'] = vllm.__version__
-except: pass
-try:
-    import flag_gems
-    info['flaggems'] = flag_gems.__version__
-except: pass
-print(json.dumps(info, indent=2))
+if hasattr(flag_gems, 'enable'):
+    sig = inspect.signature(flag_gems.enable)
+    result['enable_params'] = list(sig.parameters.keys())
+print(json.dumps(result, indent=2))
 "
 ```
 
-如果发现版本冲突（如新版 FlagGems 要求不同的 torch 版本），生成 `env_diff_report.md` 并报告用户。
-
----
-
-## 步骤 4 — 执行升级
-
-```bash
-${CMD_PREFIX} bash -c "
-  cd /tmp && \
-  git clone <repo_url> && \
-  cd <repo_dir> && \
-  git checkout <branch> && \
-  pip install -e .
-"
-```
-
-**各组件参考仓库**（实际地址以用户提供为准）：
-
-| 组件 | 仓库地址 | 备注 |
-|------|----------|------|
-| flaggems | 用户提供 | 算子替换库 |
-| flagscale | 用户提供 | 推理框架 |
-| flagcx | 用户提供 | 通信库 |
-| vllm_plugin | 用户提供 | vLLM 插件 |
-
-**注意事项**：
-- 部分组件可能有额外依赖，需要 `pip install -e .[all]` 或指定依赖
-- 如果安装失败，检查编译依赖（如 CUDA toolkit、gcc 等）
-- 向用户展示将要执行的命令，确认后再执行
-
----
-
-## 步骤 5 — 验证升级
-
-```bash
-${CMD_PREFIX} pip show <package>
-```
-
-对比升级前后的版本：
-
-```
-升级结果：
-  flaggems: 1.0.0 → 1.2.0
-  flagcx: 0.2.0 → 0.3.0
-```
-
----
-
-## 步骤 6 — 升级后自动验证（Scenario B 新增）
-
-### 6.1 快速启动验证
-
-```bash
-# 以 flagos 模式启动服务（参考 service-startup）
-# 验证服务是否能成功启动
-```
-
-### 6.2 成功 / 失败处理
-
-| 结果 | 操作 |
-|------|------|
-| 启动成功 | 继续性能测试 → flagos_after_upgrade benchmark |
-| 启动失败 | 自动恢复旧环境 → 进入算子优化 |
-
-### 6.3 自动恢复旧环境
-
-如果升级后启动失败：
-
-```bash
-# 回退 FlagGems
-${CMD_PREFIX} pip install flag-gems==<old_version>
-
-# 或重新安装旧版
-${CMD_PREFIX} bash -c "
-  cd /tmp/<old_repo_dir> && \
-  git checkout <old_branch> && \
-  pip install -e .
-"
-```
-
----
-
-## 步骤 7 — 提醒后续操作
-
-升级完成后：
-
-1. **重新执行环境检查**：重新执行 `flagos-pre-service-inspection`，更新 context.yaml
-2. **重启服务**：如果服务正在运行，需要重启
-3. **性能测试**：运行升级后 benchmark 对比
+## 步骤 6 — 写入 context.yaml
 
 ---
 
 # 完成条件
 
-组件升级成功的标志：
-
 - 目标组件已确定
-- （Scenario B）环境一致性已检查
-- 升级操作已执行
+- 网络策略已执行（容器内直连或宿主机降级）
+- 升级操作已完成
 - 版本变化已记录
-- （Scenario B）升级后启动验证已完成
-- 已提醒用户后续操作
+- API 兼容性已检查
+- context.yaml 已更新
 
 ---
 
@@ -228,8 +144,7 @@ ${CMD_PREFIX} bash -c "
 
 | 问题 | 解决方案 |
 |------|----------|
-| git clone 失败 | 检查网络连接和仓库地址，可能需要配置代理 |
-| pip install 编译失败 | 检查编译工具链（gcc、g++）和 CUDA 版本 |
-| 版本冲突 | 检查依赖关系，可能需要先卸载旧版本 `pip uninstall <package>` |
-| 升级后服务启动失败 | 版本不兼容 → 自动恢复旧环境 → 算子优化 |
-| 升级后算子不兼容 | 部分新版算子可能需要排除 → 触发 operator-replacement |
+| 容器无网络 | upgrade_component.py 自动输出宿主机操作指令 |
+| pip install 编译失败 | 脚本自动安装 setuptools/scikit-build-core |
+| 版本冲突 | 检查依赖关系，可能需先 `pip uninstall` |
+| 升级后服务启动失败 | 版本不兼容 → `pip install flag-gems==<old_version>` 回退 |
