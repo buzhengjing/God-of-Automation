@@ -1,0 +1,236 @@
+# Benchmark Registry: 模型类型 → Benchmark 映射表
+# runner 类型: evalscope (原生) / vlmeval (VLMEvalKit后端) / custom (自研脚本)
+
+LLM:
+  required:
+    - name: mmlu
+      runner: evalscope
+      display_name: "MMLU_5shot"
+      description: "大规模多任务语言理解 (57个学科)"
+      args:
+        few_shot_num: 5
+    - name: aime24
+      runner: evalscope
+      display_name: "AIME24_0shot"
+      description: "美国数学邀请赛 2024"
+      args:
+        few_shot_num: 0
+    - name: aime25
+      runner: evalscope
+      display_name: "AIME25_0shot"
+      description: "美国数学邀请赛 2025"
+      args:
+        few_shot_num: 0
+    - name: gpqa_diamond
+      runner: evalscope
+      display_name: "GPQA_Diamond_0shot"
+      description: "研究生水平科学问答"
+      args:
+        few_shot_num: 0
+    - name: musr
+      runner: evalscope
+      display_name: "MUSR_0shot"
+      description: "多步推理"
+      args:
+        few_shot_num: 0
+  optional:
+    - name: livebench
+      runner: custom
+      display_name: "LiveBench"
+      description: "实时更新评测集"
+      script: "custom_eval/eval_livebench.py"
+    - name: math_500
+      runner: evalscope
+      display_name: "MATH-500_0shot"
+      description: "数学推理 (500题)"
+      args:
+        few_shot_num: 0
+    - name: mmlu_pro
+      runner: evalscope
+      display_name: "MMLU-Pro_0shot"
+      description: "MMLU 进阶版"
+      args:
+        few_shot_num: 0
+    - name: theoremqa
+      runner: custom
+      display_name: "TheoremQA"
+      description: "定理证明问答"
+      script: "custom_eval/eval_theoremqa.py"
+    - name: gsm8k
+      runner: evalscope
+      display_name: "GSM8K"
+      description: "小学数学推理"
+      args:
+        few_shot_num: 0
+    - name: ceval
+      runner: evalscope
+      display_name: "CEVAL"
+      description: "中文评测"
+      args:
+        few_shot_num: 0
+
+VL:
+  required:
+    - name: mmmu
+      runner: evalscope
+      display_name: "MMMU_val"
+      description: "多学科多模态理解"
+      args:
+        few_shot_num: 0
+    - name: cmmmu
+      runner: evalscope
+      display_name: "CMMMU_val"
+      description: "中文多学科多模态理解"
+      args:
+        few_shot_num: 0
+    - name: mmmu_pro
+      runner: evalscope
+      display_name: "MMMU_Pro"
+      description: "MMMU 进阶版"
+      args:
+        few_shot_num: 0
+        # subset_list: ["standard", "vision"]  # 支持分 standard/vision 两个子集
+    - name: blink
+      runner: evalscope
+      display_name: "Blink_val"
+      description: "视觉感知基准"
+      args:
+        few_shot_num: 0
+    - name: ocr_bench
+      runner: evalscope
+      display_name: "OCRBench"
+      description: "OCR 能力评测"
+      args:
+        few_shot_num: 0
+    - name: math_vision
+      runner: evalscope
+      display_name: "MathVision"
+      description: "数学视觉推理"
+      args:
+        few_shot_num: 0
+    - name: cii_bench
+      runner: custom
+      display_name: "CII-Bench"
+      description: "中文图像理解基准"
+      script: "custom_eval/eval_cii_bench.py"
+    - name: mm_vet_v2
+      runner: custom
+      display_name: "MM-Vet_v2"
+      description: "多模态综合能力评测"
+      script: "custom_eval/eval_mm_vet.py"
+  optional:
+    - name: math_vista
+      runner: evalscope
+      display_name: "MathVista"
+      description: "数学视觉问答"
+      args:
+        few_shot_num: 0
+    - name: video_mme
+      runner: custom
+      display_name: "Video-MME"
+      description: "视频多模态评测"
+      script: "custom_eval/eval_video_mme.py"
+
+Omni:
+  # Omni 模型 = LLM 必测 + VL 必测
+  # 编排器会自动合并 LLM.required 和 VL.required
+  required: []
+  optional: []
+  inherit:
+    - LLM
+    - VL
+
+Robotics:
+  required:
+    - name: erqa
+      runner: custom
+      display_name: "ERQA"
+      description: "具身机器人问答"
+      script: "custom_eval/eval_robotics.py"
+      args:
+        benchmark: erqa
+    - name: sat
+      runner: custom
+      display_name: "SAT"
+      description: "空间感知变换"
+      script: "custom_eval/eval_robotics.py"
+      args:
+        benchmark: sat
+    - name: all_angles
+      runner: custom
+      display_name: "All-Angles_Bench"
+      description: "多角度理解基准"
+      script: "custom_eval/eval_robotics.py"
+      args:
+        benchmark: all_angles
+    - name: where2place
+      runner: custom
+      display_name: "Where2Place"
+      description: "物体放置推理"
+      script: "custom_eval/eval_robotics.py"
+      args:
+        benchmark: where2place
+    - name: blink_ev
+      runner: custom
+      display_name: "Blink_val_ev"
+      description: "具身视觉感知"
+      script: "custom_eval/eval_robotics.py"
+      args:
+        benchmark: blink_ev
+    - name: robospatial
+      runner: custom
+      display_name: "RoboSpatial-Home"
+      description: "机器人空间理解"
+      script: "custom_eval/eval_robotics.py"
+      args:
+        benchmark: robospatial
+    - name: egoplan2
+      runner: custom
+      display_name: "EgoPlan-Bench2"
+      description: "第一人称规划基准"
+      script: "custom_eval/eval_robotics.py"
+      args:
+        benchmark: egoplan2
+    - name: cv_bench
+      runner: custom
+      display_name: "CV-Bench"
+      description: "计算机视觉基准"
+      script: "custom_eval/eval_robotics.py"
+      args:
+        benchmark: cv_bench
+    - name: embspatial
+      runner: custom
+      display_name: "EmbSpatial-Bench"
+      description: "具身空间推理"
+      script: "custom_eval/eval_robotics.py"
+      args:
+        benchmark: embspatial
+    - name: vsi_bench
+      runner: custom
+      display_name: "VSI-Bench"
+      description: "视觉空间智能基准"
+      script: "custom_eval/eval_robotics.py"
+      args:
+        benchmark: vsi_bench
+  optional:
+    - name: embodiedverse
+      runner: custom
+      display_name: "EmbodiedVerse-Open"
+      description: "开放具身世界模拟"
+      script: "custom_eval/eval_robotics.py"
+      args:
+        benchmark: embodiedverse
+    - name: mape
+      runner: custom
+      display_name: "MAPE"
+      description: "机器人动作预测评测"
+      script: "custom_eval/eval_mape.py"
+
+ImageGen:
+  required:
+    - name: image_gen_qualitative
+      runner: custom
+      display_name: "Image_Gen_Qualitative"
+      description: "图像生成定性评估"
+      script: "custom_eval/eval_image_gen.py"
+  optional: []
