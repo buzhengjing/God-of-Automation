@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import subprocess
+import time
 import traceback
 from typing import Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -102,6 +103,7 @@ def run_single_benchmark(
     logger.separator("-", 50)
     logger.log(f">>> Running: {display_name} (runner={runner})")
 
+    start = time.time()
     try:
         if runner == 'evalscope':
             detail = _run_evalscope(bench_name, bench_args, display_name, config, work_dir, limit, logger)
@@ -113,12 +115,23 @@ def run_single_benchmark(
         else:
             detail = build_detail(display_name, 0.0, {"error": f"Unknown runner: {runner}"}, "F")
 
-        logger.log(f"<<< {display_name}: accuracy={detail.get('accuracy', 'N/A')}, status={detail.get('status', 'N/A')}")
+        elapsed = round(time.time() - start, 2)
+
+        # 将耗时注入 detail
+        if isinstance(detail, list):
+            for d in detail:
+                d['duration_seconds'] = elapsed
+        else:
+            detail['duration_seconds'] = elapsed
+
+        logger.log(f"<<< {display_name}: accuracy={detail.get('accuracy', 'N/A')}, status={detail.get('status', 'N/A')}, duration={elapsed}s")
 
     except Exception as e:
+        elapsed = round(time.time() - start, 2)
         logger.log(f"[ERROR] {display_name} failed: {str(e)}")
         logger.log(traceback.format_exc())
         detail = build_detail(display_name, 0.0, {"error": str(e)}, "F")
+        detail['duration_seconds'] = elapsed
 
     return {
         "benchmark": bench_name,
@@ -261,6 +274,8 @@ def run_orchestrator(
     Returns:
         最终报告 dict
     """
+    total_start = time.time()
+
     model_name = config['model']['name']
     model_type = config['model'].get('type', 'LLM')
     output_cfg = config.get('output', {})
@@ -323,6 +338,7 @@ def run_orchestrator(
                 all_details.append(detail)
 
     # 生成报告
+    total_elapsed = round(time.time() - total_start, 2)
     logger.section("Generating Report")
 
     from report_generator import generate_report
@@ -333,6 +349,7 @@ def run_orchestrator(
         output_dir=os.path.dirname(output_cfg.get('report_json', 'eval_report.json')) or '.',
         report_json=os.path.basename(output_cfg.get('report_json', 'eval_report.json')),
         report_md=os.path.basename(output_cfg.get('report_md', 'eval_report.md')),
+        total_duration_seconds=total_elapsed,
     )
 
     logger.section("Evaluation Complete")
@@ -340,6 +357,7 @@ def run_orchestrator(
     success = sum(1 for d in all_details if d.get('status') == 'S')
     failed = len(all_details) - success
     logger.log(f"Success: {success}, Failed: {failed}")
+    logger.log(f"Total duration: {total_elapsed}s ({total_elapsed/60:.1f} min)")
     logger.log(f"Report: {output_cfg.get('report_json', 'eval_report.json')}")
 
     return report

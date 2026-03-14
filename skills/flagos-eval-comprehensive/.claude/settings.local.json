@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd \"E:/Course_Materials/pycharm/God-of-Automation/skills/flagos-eval-comprehensive/tools\" && python -c \"import py_compile; py_compile.compile\\('eval_orchestrator.py', doraise=True\\); py_compile.compile\\('report_generator.py', doraise=True\\); print\\('OK: both files compile cleanly'\\)\")"
+    ]
+  }
+}

@@ -19,6 +19,7 @@ def generate_report(
     output_dir: str = ".",
     report_json: str = "eval_report.json",
     report_md: str = "eval_report.md",
+    total_duration_seconds: Optional[float] = None,
 ) -> Dict:
     """
     汇总评测结果并生成报告。
@@ -30,6 +31,7 @@ def generate_report(
         output_dir: 输出目录
         report_json: JSON 报告文件名
         report_md: Markdown 报告文件名
+        total_duration_seconds: 整体评测耗时（秒）
 
     Returns:
         汇总结果 dict
@@ -50,12 +52,15 @@ def generate_report(
                 else f"Partial: {len(success_details)} ok, {len(failed_details)} failed",
     )
 
+    if total_duration_seconds is not None:
+        result['total_duration_seconds'] = total_duration_seconds
+
     # 保存 JSON
     json_path = os.path.join(output_dir, report_json)
     save_json(result, json_path)
 
     # 生成 Markdown
-    md_content = _generate_markdown(model_name, model_type, details, success_details, failed_details)
+    md_content = _generate_markdown(model_name, model_type, details, success_details, failed_details, total_duration_seconds)
     md_path = os.path.join(output_dir, report_md)
     with open(md_path, 'w', encoding='utf-8') as f:
         f.write(md_content)
@@ -69,6 +74,7 @@ def _generate_markdown(
     all_details: List[Dict],
     success_details: List[Dict],
     failed_details: List[Dict],
+    total_duration_seconds: Optional[float] = None,
 ) -> str:
     """生成 Markdown 格式的评测报告。"""
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -80,21 +86,31 @@ def _generate_markdown(
         f"> 生成时间: {now}",
         f"> Benchmark 总数: {len(all_details)}",
         f"> 成功: {len(success_details)} | 失败: {len(failed_details)}",
+    ]
+
+    if total_duration_seconds is not None:
+        minutes = int(total_duration_seconds // 60)
+        seconds = round(total_duration_seconds % 60, 1)
+        lines.append(f"> 总耗时: {minutes}m {seconds}s")
+
+    lines.extend([
         "",
         "---",
         "",
         "## 评测结果总览",
         "",
-        "| Benchmark | 状态 | 得分 |",
-        "|-----------|------|------|",
-    ]
+        "| Benchmark | 状态 | 得分 | 耗时 |",
+        "|-----------|------|------|------|",
+    ])
 
     for d in all_details:
         status = "Pass" if d.get('status') == 'S' else "Fail"
         accuracy = d.get('accuracy', 'N/A')
         if isinstance(accuracy, (int, float)):
             accuracy = f"{accuracy:.2f}"
-        lines.append(f"| {d.get('dataset', 'Unknown')} | {status} | {accuracy} |")
+        duration = d.get('duration_seconds')
+        duration_str = f"{duration}s" if duration is not None else "-"
+        lines.append(f"| {d.get('dataset', 'Unknown')} | {status} | {accuracy} | {duration_str} |")
 
     lines.extend(["", "---", ""])
 
