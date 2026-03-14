@@ -1,0 +1,69 @@
+# FlagOS Comprehensive Evaluation Configuration
+
+model:
+  name: ""                                # 模型名称（必填）
+  type: "LLM"                             # 模型类型: LLM / VL / Omni / Robotics / ImageGen
+  api_base: "http://localhost:8000/v1"    # OpenAI 兼容 API 地址
+  api_key: "EMPTY"                        # API 密钥
+
+# EvalScope 框架配置
+evalscope:
+  dataset_hub: "modelscope"               # 数据集来源: modelscope / huggingface
+  dataset_dir: "/flagos-workspace/eval/datasets/evalscope_cache"  # 本地预下载缓存路径（预下载后可离线评测）
+  # hf_mirror: "https://hf-mirror.com"   # HuggingFace 镜像（可选，预下载脚本使用）
+  eval_type: "openai_api"                 # 评测类型: openai_api / llm_ckpt
+  eval_batch_size: 64                     # 并行请求 batch 大小
+  stream: true                            # 流式输出
+  timeout: 60000                          # 单请求超时（毫秒）
+
+# 生成配置（默认为确定性评测）
+generation_config:
+  max_tokens: 30000
+  temperature: 0.0
+  top_p: 1.0
+  n: 1
+
+# thinking 模型请取消下方注释并覆盖上方配置：
+# generation_config:
+#   max_tokens: 30000
+#   temperature: 0.6
+#   top_p: 0.95
+#   top_k: 20
+#   n: 1
+
+# thinking 模型过滤思考内容（EvalScope 原生 benchmark 使用）：
+# dataset_filters:
+#   remove_until: "</think>"
+
+# 自研评测脚本配置
+custom_eval:
+  max_retries: 3                          # API 调用重试次数
+  retry_delay: 5                          # 重试间隔（秒）
+  request_timeout: 300                    # 单请求超时（秒）
+
+# 具身智能模型数据集路径（Robotics 类型使用）
+robotics_datasets:
+  erqa_path: "datasets/ERQA"
+  # 以下 benchmark 需提前下载数据集
+  sat_path: "datasets/SAT"
+  all_angles_path: "datasets/All-Angles"
+  where2place_path: "datasets/Where2Place"
+  blink_ev_path: "datasets/Blink_ev"
+  robospatial_path: "datasets/RoboSpatial-Home"
+  egoplan2_path: "datasets/EgoPlan-Bench2"
+  cv_bench_path: "datasets/CV-Bench"
+  embspatial_path: "datasets/EmbSpatial-Bench"
+  vsi_bench_path: "datasets/VSI-Bench"
+  embodiedverse_path: "datasets/EmbodiedVerse-Open"
+
+# MAPE 评测（端到端机器人模型 X0/pi0）
+mape:
+  reference_actions_path: "datasets/MAPE/reference_actions.npy"
+  predicted_actions_path: ""              # 模型推理输出的动作张量路径
+
+# 输出配置
+output:
+  work_dir: "outputs"                     # 评测输出根目录
+  report_json: "eval_report.json"         # JSON 汇总报告
+  report_md: "eval_report.md"             # Markdown 可读报告
+  progress_log: "eval_progress.log"       # 全局进度日志
