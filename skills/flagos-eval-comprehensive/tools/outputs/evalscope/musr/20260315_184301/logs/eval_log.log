@@ -1,0 +1,164 @@
+2026-03-15 18:43:01 - evalscope - INFO: Running with native backend
+2026-03-15 18:43:01 - evalscope - INFO: Dump task config to outputs/evalscope/musr/20260315_184301/configs/task_config.yaml
+2026-03-15 18:43:01 - evalscope - INFO: {
+    "model": "/nfs/models/Qwen3-8B/",
+    "model_id": "untitled",
+    "model_args": {},
+    "model_task": "text_generation",
+    "chat_template": null,
+    "datasets": [
+        "musr"
+    ],
+    "dataset_args": {
+        "musr": {
+            "name": "musr",
+            "dataset_id": "AI-ModelScope/MuSR",
+            "output_types": [
+                "generation"
+            ],
+            "subset_list": [
+                "murder_mysteries",
+                "object_placements",
+                "team_allocation"
+            ],
+            "default_subset": "default",
+            "few_shot_num": 0,
+            "few_shot_random": false,
+            "train_split": null,
+            "eval_split": "test",
+            "prompt_template": "Answer the following multiple choice question. The last line of your response should be of the following format: 'ANSWER: [LETTER]' (without quotes) where [LETTER] is one of {letters}. Think step by step before answering.\n\n{question}\n\n{choices}",
+            "few_shot_prompt_template": null,
+            "system_prompt": null,
+            "query_template": null,
+            "pretty_name": "MuSR",
+            "description": "\n## Overview\n\nMuSR (Multistep Soft Reasoning) is a benchmark for evaluating complex reasoning abilities through narrative-based problems. It includes murder mysteries, object placements, and team allocation scenarios requiring multi-step inference.\n\n## Task Description\n\n- **Task Type**: Complex Reasoning (Multiple-Choice)\n- **Input**: Narrative scenario with question and answer choices\n- **Output**: Correct answer letter (A-F)\n- **Domains**: Murder mysteries, object tracking, team allocation\n\n## Key Features\n\n- Narrative-based reasoning problems\n- Requires multi-step logical inference\n- Three distinct reasoning domains\n- Tests constraint satisfaction and deduction\n- Longer context requiring careful reasoning\n\n## Evaluation Notes\n\n- Default configuration uses **0-shot** evaluation\n- Uses Chain-of-Thought (CoT) prompting\n- Three subsets: `murder_mysteries`, `object_placements`, `team_allocation`\n- Simple accuracy metric\n- Challenging benchmark requiring careful reading\n",
+            "paper_url": null,
+            "data_statistics": null,
+            "sample_example": null,
+            "tags": [
+                "Reasoning",
+                "MCQ"
+            ],
+            "filters": null,
+            "metric_list": [
+                "acc"
+            ],
+            "aggregation": "mean",
+            "shuffle": false,
+            "shuffle_choices": false,
+            "force_redownload": false,
+            "review_timeout": null,
+            "extra_params": {},
+            "sandbox_config": {}
+        }
+    },
+    "dataset_dir": "/flagos-workspace/eval/datasets/evalscope_cache",
+    "dataset_hub": "modelscope",
+    "repeats": 1,
+    "generation_config": {
+        "timeout": 60000,
+        "batch_size": 64,
+        "stream": true,
+        "max_tokens": 8192,
+        "top_p": 1.0,
+        "temperature": 0.0,
+        "n": 1
+    },
+    "eval_type": "openai_api",
+    "eval_backend": "Native",
+    "eval_config": null,
+    "limit": null,
+    "eval_batch_size": 64,
+    "use_cache": null,
+    "rerun_review": false,
+    "work_dir": "outputs/evalscope/musr/20260315_184301",
+    "no_timestamp": false,
+    "enable_progress_tracker": false,
+    "ignore_errors": false,
+    "debug": false,
+    "seed": 42,
+    "api_url": "http://localhost:8000/v1",
+    "timeout": 60000,
+    "stream": true,
+    "judge_strategy": "auto",
+    "judge_worker_num": 1,
+    "judge_model_args": {},
+    "analysis_report": false,
+    "use_sandbox": false,
+    "sandbox_type": "docker",
+    "sandbox_manager_config": {},
+    "evalscope_version": "1.5.0"
+}
+2026-03-15 18:43:01 - evalscope - INFO: Start loading benchmark dataset: musr
+2026-03-15 18:43:01 - evalscope - INFO: Loading dataset AI-ModelScope/MuSR from modelscope > subset: default > split: murder_mysteries ...
+2026-03-15 18:43:12 - evalscope - INFO: Loading dataset AI-ModelScope/MuSR from modelscope > subset: default > split: object_placements ...
+2026-03-15 18:43:16 - evalscope - INFO: Loading dataset AI-ModelScope/MuSR from modelscope > subset: default > split: team_allocation ...
+2026-03-15 18:43:19 - evalscope - INFO: Start evaluating 3 subsets of musr: ['murder_mysteries', 'object_placements', 'team_allocation']
+2026-03-15 18:43:19 - evalscope - INFO: Unified pool: 756 items to process, 0 already fully cached (756 total across all subsets).
+2026-03-15 18:43:19 - evalscope - INFO: Loading model for prediction...
+2026-03-15 18:43:19 - evalscope - INFO: Model loaded successfully.
+2026-03-15 18:44:20 - evalscope - INFO: Evaluating[musr]   4%| 32/756 [Elapsed: 01:00 < Remaining: 18:40,  1.55s/it]
+2026-03-15 18:45:20 - evalscope - INFO: Evaluating[musr]  10%| 79/756 [Elapsed: 02:00 < Remaining: 14:55,  1.32s/it]
+2026-03-15 18:46:21 - evalscope - INFO: Evaluating[musr]  15%| 116/756 [Elapsed: 03:01 < Remaining: 25:55,  2.43s/it]
+2026-03-15 18:47:21 - evalscope - INFO: Evaluating[musr]  20%| 153/756 [Elapsed: 04:01 < Remaining: 27:27,  2.73s/it]
+2026-03-15 18:48:21 - evalscope - INFO: Evaluating[musr]  25%| 190/756 [Elapsed: 05:02 < Remaining: 15:48,  1.68s/it]
+2026-03-15 18:49:22 - evalscope - INFO: Evaluating[musr]  29%| 222/756 [Elapsed: 06:02 < Remaining: 11:09,  1.25s/it]
+2026-03-15 18:50:22 - evalscope - INFO: Evaluating[musr]  34%| 260/756 [Elapsed: 07:02 < Remaining: 09:50,  1.19s/it]
+2026-03-15 18:51:23 - evalscope - INFO: Evaluating[musr]  39%| 297/756 [Elapsed: 08:03 < Remaining: 06:36,  1.16it/s]
+2026-03-15 18:52:23 - evalscope - INFO: Evaluating[musr]  44%| 332/756 [Elapsed: 09:03 < Remaining: 08:14,  1.17s/it]
+2026-03-15 18:53:24 - evalscope - INFO: Evaluating[musr]  49%| 372/756 [Elapsed: 10:04 < Remaining: 08:47,  1.37s/it]
+2026-03-15 18:54:25 - evalscope - INFO: Evaluating[musr]  53%| 404/756 [Elapsed: 11:05 < Remaining: 10:55,  1.86s/it]
+2026-03-15 18:55:25 - evalscope - INFO: Evaluating[musr]  58%| 440/756 [Elapsed: 12:05 < Remaining: 12:22,  2.35s/it]
+2026-03-15 18:56:25 - evalscope - INFO: Evaluating[musr]  63%| 476/756 [Elapsed: 13:05 < Remaining: 05:25,  1.16s/it]
+2026-03-15 18:57:25 - evalscope - INFO: Evaluating[musr]  67%| 503/756 [Elapsed: 14:05 < Remaining: 11:32,  2.74s/it]
+2026-03-15 18:58:26 - evalscope - INFO: Evaluating[musr]  70%| 532/756 [Elapsed: 15:06 < Remaining: 09:50,  2.63s/it]
+2026-03-15 18:59:26 - evalscope - INFO: Evaluating[musr]  74%| 561/756 [Elapsed: 16:07 < Remaining: 06:26,  1.98s/it]
+2026-03-15 19:00:27 - evalscope - INFO: Evaluating[musr]  79%| 596/756 [Elapsed: 17:07 < Remaining: 04:18,  1.61s/it]
+2026-03-15 19:01:27 - evalscope - INFO: Evaluating[musr]  82%| 622/756 [Elapsed: 18:07 < Remaining: 06:56,  3.11s/it]
+2026-03-15 19:02:28 - evalscope - INFO: Evaluating[musr]  86%| 651/756 [Elapsed: 19:08 < Remaining: 05:09,  2.95s/it]
+2026-03-15 19:03:28 - evalscope - INFO: Evaluating[musr]  91%| 690/756 [Elapsed: 20:09 < Remaining: 02:14,  2.04s/it]
+2026-03-15 19:04:29 - evalscope - INFO: Evaluating[musr]  96%| 724/756 [Elapsed: 21:09 < Remaining: 00:37,  1.16s/it]
+2026-03-15 19:05:29 - evalscope - INFO: Evaluating[musr]  99%| 748/756 [Elapsed: 22:09 < Remaining: 00:26,  3.32s/it]
+2026-03-15 19:06:29 - evalscope - INFO: Evaluating[musr] 100%| 754/756 [Elapsed: 23:09 < Remaining: 00:15,  7.72s/it]
+2026-03-15 19:06:42 - evalscope - INFO: Evaluating[musr] 100%| 756/756 [Elapsed: 23:22 < Remaining: 00:00, 11.15s/it]
+2026-03-15 19:06:42 - evalscope - INFO: Unified pool finished for musr.
+2026-03-15 19:06:42 - evalscope - INFO: Aggregating scores for subset: murder_mysteries
+2026-03-15 19:06:42 - evalscope - INFO: Aggregating scores for subset: object_placements
+2026-03-15 19:06:42 - evalscope - INFO: Aggregating scores for subset: team_allocation
+2026-03-15 19:06:42 - evalscope - INFO: Generating report...
+2026-03-15 19:06:42 - evalscope - INFO: 
+musr report table:
++----------+-----------+----------+-------------------+-------+---------+---------+
+| Model    | Dataset   | Metric   | Subset            |   Num |   Score | Cat.0   |
++==========+===========+==========+===================+=======+=========+=========+
+| untitled | musr      | mean_acc | murder_mysteries  |   250 |  0.624  | default |
++----------+-----------+----------+-------------------+-------+---------+---------+
+| untitled | musr      | mean_acc | object_placements |   256 |  0.4922 | default |
++----------+-----------+----------+-------------------+-------+---------+---------+
+| untitled | musr      | mean_acc | team_allocation   |   250 |  0.716  | default |
++----------+-----------+----------+-------------------+-------+---------+---------+
+| untitled | musr      | mean_acc | OVERALL           |   756 |  0.6098 | -       |
++----------+-----------+----------+-------------------+-------+---------+---------+ 
+
+2026-03-15 19:06:42 - evalscope - INFO: Skipping report analysis (`analysis_report=False`).
+2026-03-15 19:06:42 - evalscope - INFO: Dump report to: outputs/evalscope/musr/20260315_184301/reports/untitled/musr.json 
+
+2026-03-15 19:06:42 - evalscope - INFO: Benchmark musr evaluation finished.
+2026-03-15 19:06:42 - evalscope - INFO: Running[eval] 100%| 1/1 [Elapsed: 23:40 < Remaining: 00:00, 1420.65s/benchmark]
+2026-03-15 19:06:42 - evalscope - INFO: Overall report table: 
++----------+-----------+----------+-------------------+-------+---------+---------+
+| Model    | Dataset   | Metric   | Subset            |   Num |   Score | Cat.0   |
++==========+===========+==========+===================+=======+=========+=========+
+| untitled | musr      | mean_acc | murder_mysteries  |   250 |  0.624  | default |
++----------+-----------+----------+-------------------+-------+---------+---------+
+| untitled | musr      | mean_acc | object_placements |   256 |  0.4922 | default |
++----------+-----------+----------+-------------------+-------+---------+---------+
+| untitled | musr      | mean_acc | team_allocation   |   250 |  0.716  | default |
++----------+-----------+----------+-------------------+-------+---------+---------+
+| untitled | musr      | mean_acc | OVERALL           |   756 |  0.6098 | -       |
++----------+-----------+----------+-------------------+-------+---------+---------+ 
+
+2026-03-15 19:06:42 - evalscope - INFO: HTML report generated: /workspace/God-of-Automation/skills/flagos-eval-comprehensive/tools/outputs/evalscope/musr/20260315_184301/reports/report.html
+2026-03-15 19:06:42 - evalscope - INFO: HTML report generated: /workspace/God-of-Automation/skills/flagos-eval-comprehensive/tools/outputs/evalscope/musr/20260315_184301/reports/report.html
+2026-03-15 19:06:42 - evalscope - INFO: Finished evaluation for untitled on ['musr']
+2026-03-15 19:06:42 - evalscope - INFO: Output directory: outputs/evalscope/musr/20260315_184301

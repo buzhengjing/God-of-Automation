@@ -26,6 +26,90 @@ from utils import (
 )
 
 
+# Thinking model 自动检测关键词
+THINKING_MODEL_PATTERNS = [
+    'qwen3', 'qwq', 'deepseek-r1', 'deepseek-r2',
+]
+
+
+def is_thinking_model(model_name: str) -> bool:
+    """根据模型名称自动检测是否为 thinking model。"""
+    name_lower = model_name.lower()
+    return any(pattern in name_lower for pattern in THINKING_MODEL_PATTERNS)
+
+
+def detect_thinking_model(config: dict, logger: Optional[ProgressLogger] = None) -> bool:
+    """
+    检测模型是否为 thinking model，仅做检测不修改 config。
+    优先级: model.thinking 显式设置 > 自动检测模型名。
+    """
+    model_cfg = config.get('model', {})
+    model_name = model_cfg.get('name', '')
+    thinking_explicit = model_cfg.get('thinking', None)
+
+    if thinking_explicit is True:
+        result = True
+    elif thinking_explicit is False:
+        result = False
+    else:
+        result = is_thinking_model(model_name)
+
+    if logger:
+        if result:
+            logger.log(f"[Thinking Model] Detected thinking model: {model_name}")
+            logger.log(f"[Thinking Model] Per-benchmark thinking config will be applied")
+        else:
+            logger.log(f"[Model] Standard (non-thinking) model: {model_name}")
+
+    return result
+
+
+def get_benchmark_config(
+    bench: Dict,
+    config: dict,
+    model_is_thinking: bool,
+) -> Tuple[Dict, Optional[Dict]]:
+    """
+    根据 benchmark 的 thinking 字段和模型是否为 thinking model，
+    返回该 benchmark 应使用的 (generation_config, dataset_filters)。
+
+    逻辑:
+    - 模型是 thinking + benchmark.thinking=true → 使用 thinking_generation_config + dataset_filters
+    - 其它情况 → 使用标准 generation_config，无 dataset_filters
+
+    Args:
+        bench: benchmark 注册表条目（含 thinking 字段）
+        config: 主配置
+        model_is_thinking: 模型是否为 thinking model
+
+    Returns:
+        (generation_config, dataset_filters)
+    """
+    bench_wants_thinking = bench.get('thinking', False)
+    use_thinking = model_is_thinking and bench_wants_thinking
+
+    if use_thinking:
+        # 优先用 thinking_generation_config，fallback 到默认值
+        thinking_gen = config.get('thinking_generation_config')
+        if thinking_gen:
+            gen_config = dict(thinking_gen)
+        else:
+            gen_config = {
+                'max_tokens': 30000,
+                'temperature': 0.6,
+                'top_p': 0.95,
+                'top_k': 20,
+                'n': 1,
+            }
+        # 启用 dataset_filters
+        ds_filters = config.get('dataset_filters') or {'remove_until': '</think>'}
+        if 'remove_until' not in ds_filters:
+            ds_filters['remove_until'] = '</think>'
+        return gen_config, ds_filters
+    else:
+        return dict(config.get('generation_config', {})), None
+
+
 def resolve_benchmarks(
     model_type: str,
     registry: dict,
@@ -88,9 +172,18 @@ def run_single_benchmark(
     work_dir: str,
     limit: Optional[int],
     logger: ProgressLogger,
+    model_is_thinking: bool = False,
 ) -> Dict:
     """
     运行单个 benchmark。
+
+    Args:
+        bench: benchmark 注册表条目
+        config: 主配置
+        work_dir: 输出目录
+        limit: 样本数限制
+        logger: 日志器
+        model_is_thinking: 模型是否为 thinking model
 
     Returns:
         {"benchmark": str, "display_name": str, "runner": str, "detail": dict}
@@ -100,13 +193,20 @@ def run_single_benchmark(
     runner = bench.get('runner', 'evalscope')
     bench_args = bench.get('args', {})
 
+    # 按 benchmark 粒度选择 generation_config 和 dataset_filters
+    bench_gen_config, bench_ds_filters = get_benchmark_config(bench, config, model_is_thinking)
+    use_thinking = model_is_thinking and bench.get('thinking', False)
+
     logger.separator("-", 50)
-    logger.log(f">>> Running: {display_name} (runner={runner})")
+    logger.log(f">>> Running: {display_name} (runner={runner}, thinking={'ON' if use_thinking else 'OFF'})")
 
     start = time.time()
     try:
         if runner == 'evalscope':
-            detail = _run_evalscope(bench_name, bench_args, display_name, config, work_dir, limit, logger)
+            detail = _run_evalscope(bench_name, bench_args, display_name, config,
+                                    work_dir, limit, logger,
+                                    generation_config=bench_gen_config,
+                                    dataset_filters=bench_ds_filters)
         elif runner == 'vlmeval':
             detail = _run_vlmeval(bench_name, bench_args, display_name, config, work_dir, limit, logger)
         elif runner == 'custom':
@@ -145,9 +245,15 @@ def _run_evalscope(
     bench_name: str, bench_args: dict, display_name: str,
     config: dict, work_dir: str, limit: Optional[int],
     logger: ProgressLogger,
+    generation_config: Optional[Dict] = None,
+    dataset_filters: Optional[Dict] = None,
 ) -> Dict:
     """通过 EvalScope 执行器运行 benchmark。"""
     from evalscope_runner import run_evalscope_benchmark, parse_evalscope_result
+
+    # 使用传入的 per-benchmark 配置，fallback 到全局配置
+    gen_config = generation_config or config.get('generation_config', {})
+    ds_filters = dataset_filters  # None 表示不过滤
 
     result = run_evalscope_benchmark(
         model_name=config['model']['name'],
@@ -155,11 +261,11 @@ def _run_evalscope(
         api_key=config['model'].get('api_key', 'EMPTY'),
         benchmark_name=bench_name,
         benchmark_args=bench_args,
-        generation_config=config.get('generation_config', {}),
+        generation_config=gen_config,
         evalscope_config=config.get('evalscope', {}),
         work_dir=os.path.join(work_dir, 'evalscope', bench_name),
         limit=limit,
-        dataset_filters=config.get('dataset_filters', None),
+        dataset_filters=ds_filters,
         logger=logger,
     )
 
@@ -289,6 +395,9 @@ def run_orchestrator(
     logger.log(f"Model: {model_name}")
     logger.log(f"Type: {model_type}")
 
+    # 检测模型是否为 thinking model（仅检测，不修改全局 config）
+    model_is_thinking = detect_thinking_model(config, logger)
+
     # 解析 benchmark 列表
     benchmarks = resolve_benchmarks(
         model_type, registry, skip_custom, skip_optional, only_benchmarks
@@ -296,7 +405,8 @@ def run_orchestrator(
 
     logger.log(f"Benchmarks to run: {len(benchmarks)}")
     for b in benchmarks:
-        logger.log(f"  - {b.get('display_name', b['name'])} (runner={b.get('runner', 'evalscope')})")
+        thinking_tag = " [thinking]" if (model_is_thinking and b.get('thinking', False)) else ""
+        logger.log(f"  - {b.get('display_name', b['name'])} (runner={b.get('runner', 'evalscope')}){thinking_tag}")
 
     if dry_run:
         logger.section("DRY RUN - No execution")
@@ -312,7 +422,8 @@ def run_orchestrator(
             futures = {}
             for bench in benchmarks:
                 future = executor.submit(
-                    run_single_benchmark, bench, config, work_dir, limit, logger
+                    run_single_benchmark, bench, config, work_dir, limit, logger,
+                    model_is_thinking,
                 )
                 futures[future] = bench['name']
 
@@ -330,7 +441,7 @@ def run_orchestrator(
                     all_details.append(build_detail(bench_name, 0.0, {"error": str(e)}, "F"))
     else:
         for bench in benchmarks:
-            result = run_single_benchmark(bench, config, work_dir, limit, logger)
+            result = run_single_benchmark(bench, config, work_dir, limit, logger, model_is_thinking)
             detail = result['detail']
             if isinstance(detail, list):
                 all_details.extend(detail)
@@ -350,6 +461,7 @@ def run_orchestrator(
         report_json=os.path.basename(output_cfg.get('report_json', 'eval_report.json')),
         report_md=os.path.basename(output_cfg.get('report_md', 'eval_report.md')),
         total_duration_seconds=total_elapsed,
+        registry=registry,
     )
 
     logger.section("Evaluation Complete")

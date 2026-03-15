@@ -112,6 +112,7 @@ model:
   type: <模型类型>           # LLM / VL / Omni / Robotics / ImageGen
   api_base: <API地址>        # OpenAI 兼容 API
   api_key: <API密钥>         # 可选，默认 EMPTY
+  thinking: false            # 是否为 thinking model（true/false/不设置=自动检测）
 
 evalscope:
   dataset_dir: <缓存路径>     # 预下载缓存目录（离线评测用）
@@ -119,14 +120,26 @@ evalscope:
   stream: true               # 流式输出
   timeout: 60000             # 超时（毫秒）
 
+# 标准模式生成配置（non-thinking benchmarks 使用）
 generation_config:
-  max_tokens: 4096           # 最大生成 token 数
-  temperature: 0.0           # 评测默认 0（确定性）
+  max_tokens: 8192
+  temperature: 0.0
+
+# Thinking 模式生成配置（model.thinking=true 且 benchmark.thinking=true 时使用）
+thinking_generation_config:
+  max_tokens: 30000
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
 ```
 
 ### tools/benchmark_registry.yaml
 
-定义每种模型类型对应的必测和可选 benchmark 列表，以及每个 benchmark 的执行器类型（evalscope / vlmeval / custom）和参数。
+定义每种模型类型对应的必测和可选 benchmark 列表，以及每个 benchmark 的执行器类型（evalscope / vlmeval / custom）、参数和 thinking 配置。
+
+**关键字段**：
+- `thinking: true/false` — 控制 thinking model 在该 benchmark 上是否启用 thinking 模式
+- `reference_scores` — 官方参考分数（用于报告中自动对比）
 
 ### tools/benchmark_selector.py
 
@@ -250,7 +263,7 @@ cat /data/flagos-workspace/<model_name>/eval/config.yaml
 - [ ] `model.name` 正确
 - [ ] `model.type` 与模型类型匹配（LLM/VL/Omni/Robotics/ImageGen）
 - [ ] `model.api_base` 可达
-- [ ] thinking 模型：设置 `temperature: 0.6, top_p: 0.95, top_k: 20`，启用 `filters`
+- [ ] thinking 模型配置（见下方 Thinking Model 决策指南）
 
 ### 步骤 4：运行评测
 
@@ -321,6 +334,76 @@ cat /data/flagos-workspace/<model_name>/eval/eval_report.md
   }
 }
 ```
+
+---
+
+## Thinking Model 决策指南
+
+### 什么是 thinking model
+
+Thinking model 是指经过训练能够在回答前进行长链推理的模型（输出中包含 `<think>...</think>` 块）。典型代表：Qwen3 系列、QwQ 系列、DeepSeek-R1/R2 系列。
+
+这类模型在使用正确的推理参数时，能在数学、科学、多步推理等任务上显著提升表现。
+
+### 自动检测机制
+
+编排器 `eval_orchestrator.py` 会自动处理 thinking model：
+
+1. **模型层面检测**：根据 `model.thinking` 字段或模型名自动识别
+   - 显式设置 `model.thinking: true` → 强制启用
+   - 显式设置 `model.thinking: false` → 强制关闭
+   - 未设置 → 自动检测模型名（匹配 `qwen3`, `qwq`, `deepseek-r1` 等）
+
+2. **Benchmark 层面控制**：每个 benchmark 在 `benchmark_registry.yaml` 中有 `thinking` 字段
+   - `thinking: true` — 当模型支持 thinking 时，该 benchmark 使用 thinking 配置
+   - `thinking: false` — 该 benchmark 始终使用标准配置
+
+3. **两者结合**：只有**模型是 thinking model** 且 **benchmark.thinking=true** 时，才使用 thinking 配置
+
+### Per-Benchmark 配置差异
+
+| 配置项 | 标准模式 | Thinking 模式 | 说明 |
+|--------|---------|--------------|------|
+| `temperature` | 0.0 | 0.6 | thinking 需要采样多样性启动思考链 |
+| `max_tokens` | 8192 | 30000 | thinking chain 需要大量 token 空间 |
+| `top_p` | 1.0 | 0.95 | 配合 temperature 使用 |
+| `dataset_filters` | 无 | `remove_until: "</think>"` | 答案提取前过滤思考内容 |
+
+### 哪些 Benchmark 使用 thinking
+
+| Benchmark | thinking | 原因 |
+|-----------|----------|------|
+| MMLU | false | 多选题，不需要长推理链，thinking 会大幅增加 token 消耗但收益有限 |
+| AIME24/25 | **true** | 竞赛数学，必须充分推理 |
+| GPQA Diamond | **true** | 研究生级别科学推理 |
+| MUSR | **true** | 多步推理 |
+| MATH-500 | **true** | 数学推理 |
+| GSM8K | false | 小学数学，标准模式即可 |
+| MMLU-Pro | false | 多选题 |
+| CEVAL | false | 多选题 |
+
+### 智能体决策指导
+
+**配置 `config.yaml` 时的决策规则**：
+
+1. **判断模型是否为 thinking model**：
+   - 查看模型名或官方文档，确认模型是否具备 thinking 能力
+   - 如果确定是 → 设置 `model.thinking: true`
+   - 如果确定不是 → 设置 `model.thinking: false`（或不设置，自动检测会处理）
+   - 如果不确定 → 不设置，依赖自动检测
+
+2. **不需要手动修改 `generation_config`**：
+   - 编排器会根据 benchmark 的 `thinking` 字段自动切换配置
+   - `config.yaml` 中的 `generation_config` 作为标准模式基线
+   - `thinking_generation_config` 作为 thinking 模式参数
+
+3. **可以覆盖 benchmark 的 thinking 设置**：
+   - 如果认为某个 benchmark 的 `thinking` 字段不合适，直接修改 `benchmark_registry.yaml`
+   - 例如：如果发现 MMLU 在 thinking 模式下效果更好，可以改为 `thinking: true`
+
+4. **新增 benchmark 时**：
+   - 需要深度推理的（数学、科学、多步逻辑）→ `thinking: true`
+   - 多选/知识记忆为主的 → `thinking: false`
 
 ---
 
