@@ -48,7 +48,7 @@ def generate_report(
         model_name=model_name,
         details=details,
         err_code=0 if all_success else (1 if len(success_details) == 0 else 2),
-        err_msg="Get Evaluations Details Sucess!" if all_success
+        err_msg="Get Evaluations Details Success!" if all_success
                 else f"Partial: {len(success_details)} ok, {len(failed_details)} failed",
     )
 

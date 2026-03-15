@@ -171,6 +171,9 @@ def parse_evalscope_result(result: Dict, display_name: str) -> Optional[Dict]:
     """
     解析 EvalScope 返回的结果，转换为标准 detail 格式。
 
+    run_task() 返回 {benchmark_name: Report_object}，其中 Report 是 evalscope
+    的 dataclass，需要调用 .to_dict() 转为 dict 后才能 JSON 序列化和提取分数。
+
     Args:
         result: run_evalscope_benchmark 返回的原始结果
         display_name: 显示名称
@@ -186,25 +189,36 @@ def parse_evalscope_result(result: Dict, display_name: str) -> Optional[Dict]:
             status="F",
         )
 
-    # EvalScope 结果格式可能因 benchmark 不同而异
-    # 通常在 result 的某个 key 下包含 score/accuracy
     try:
-        # 尝试从常见位置提取分数
-        if isinstance(result, dict):
-            # 检查是否有 score 字段
-            score = _extract_score(result)
-            if score is not None:
-                return build_detail(
-                    dataset=display_name,
-                    accuracy=score * 100 if score <= 1.0 else score,
-                    raw_details=result,
-                )
+        # run_task returns {benchmark_name: Report_object}
+        # Convert Report objects to dicts and extract score
+        serializable_result = {}
+        score = None
+        for key, val in result.items():
+            if hasattr(val, 'to_dict'):
+                # Report object — convert to dict for serialization
+                val_dict = val.to_dict()
+                serializable_result[key] = val_dict
+                if score is None and 'score' in val_dict:
+                    score = val_dict['score']
+            elif isinstance(val, dict):
+                serializable_result[key] = val
+                if score is None:
+                    score = _extract_score(val)
+            else:
+                serializable_result[key] = val
 
-        # 如果无法解析，返回原始结果
+        if score is not None:
+            return build_detail(
+                dataset=display_name,
+                accuracy=score * 100 if score <= 1.0 else score,
+                raw_details=serializable_result,
+            )
+
         return build_detail(
             dataset=display_name,
             accuracy=0.0,
-            raw_details=result if isinstance(result, dict) else {"raw": str(result)},
+            raw_details=serializable_result,
             status="S",
         )
     except Exception:
@@ -263,4 +277,5 @@ if __name__ == '__main__':
         limit=args.limit,
         logger=logger,
     )
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    parsed = parse_evalscope_result(result, args.benchmark)
+    print(json.dumps(parsed, indent=2, ensure_ascii=False))

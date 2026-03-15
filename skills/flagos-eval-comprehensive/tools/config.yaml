@@ -1,9 +1,9 @@
 # FlagOS Comprehensive Evaluation Configuration
 
 model:
-  name: ""                                # 模型名称（必填）
+  name: "RoboBrain2.0-7B-metax-flagos"                                # 模型名称（必填）
   type: "LLM"                             # 模型类型: LLM / VL / Omni / Robotics / ImageGen
-  api_base: "http://localhost:8000/v1"    # OpenAI 兼容 API 地址
+  api_base: "http://localhost:9010/v1"    # OpenAI 兼容 API 地址
   api_key: "EMPTY"                        # API 密钥
 
 # EvalScope 框架配置

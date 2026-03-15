@@ -357,7 +357,7 @@ def build_result(
     model_name: str,
     details: List[Dict],
     err_code: int = 0,
-    err_msg: str = "Get Evaluations Details Sucess!",
+    err_msg: str = "Get Evaluations Details Success!",
 ) -> Dict:
     """构建标准化评测结果 JSON。"""
     return {
@@ -427,11 +427,20 @@ def ensure_dir(path: str):
     os.makedirs(path, exist_ok=True)
 
 
+def _json_default(obj):
+    """JSON 序列化回退：处理 dataclass/对象等非原生类型。"""
+    if hasattr(obj, 'to_dict'):
+        return obj.to_dict()
+    if hasattr(obj, '__dict__'):
+        return obj.__dict__
+    return str(obj)
+
+
 def save_json(data: Any, path: str):
-    """保存 JSON 文件。"""
+    """保存 JSON 文件。使用 default 回退确保不会因不可序列化对象而截断。"""
     ensure_dir(os.path.dirname(path) if os.path.dirname(path) else '.')
     with open(path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+        json.dump(data, f, indent=2, ensure_ascii=False, default=_json_default)
 
 
 def load_json(path: str) -> Optional[Any]:
