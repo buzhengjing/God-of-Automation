@@ -208,7 +208,7 @@ ERQA 具身推理评测脚本。加载 Parquet 多模态数据，调用视觉语
 |------|------|------|
 | `eval_model` | 用户提供 | 评测唯一名称，如 `qwen2.5-7b-nv-flagos` |
 | `model` | context.yaml `model.name` 或 `model.container_path` | 大模型名称（与部署一致） |
-| `eval_url` | context.yaml `service.external_ip`:`service.port` | 服务评测接口，如 `http://<external_ip>:8000/v1/chat/completions`。**必须使用 `external_ip`（非 localhost）**，否则远端评测平台无法访问 |
+| `eval_url` | **询问用户提供本机 IP** | 服务评测接口。**必须询问用户提供本机外部 IP（非 localhost/127.0.0.1）**，否则远端评测平台无法访问。可提示用户通过 `hostname -I` 查看，然后拼接为 `http://<用户提供的IP>:<port>/v1/chat/completions` |
 | `tokenizer` | 用户提供 | Tokenizer 路径，如 `Qwen/Qwen2.5-7B-Instruct` |
 | `domain` | 用户选择 | `NLP`（语言模型）或 `MM`（多模态） |
 | `mode` | 用户选择 | NLP: `FlagRelease`/`XLC_train`/`XLC_infer`/`Qnext`/`quickrun`；MM: `FlagRelease`/`XLC`/`EmbodiedVerse`/`RoboTrain`/`quickrun` |
@@ -219,12 +219,32 @@ ERQA 具身推理评测脚本。加载 Parquet 多模态数据，调用视觉语
 | `num_retry` | 默认 `10` | 重试次数 |
 | `gen_kwargs` | 可选 | 生成超参数，如 `temperature=0.6,top_k=20,max_gen_toks=16000` |
 | `region` | 默认 `bj` | `bj`（大兴）或 `sz`（上庄） |
-| `user_id` | 用户提供 | FlagEval 平台用户 ID |
+| `user_id` | 用户提供或默认 `0` | FlagEval 平台用户 ID（**整数类型**，非字符串）。若用户未提供，默认使用 `0` |
 | `dry_run` | 默认 `false` | 是否仅做推理验证（少量数据） |
 
 **eval_model 命名规范**：
 - 原生版本（baseline）：`<model>-<vendor>-origin`，如 `qwen2.5-7b-nv-origin`
 - FlagOS 版本：`<model>-<vendor>-flagos`，如 `qwen2.5-7b-nv-flagos`
+
+### A1.5 — 参数预检与确认
+
+**提交前必须完成以下检查，一次性完成，禁止逐个试错：**
+
+1. **询问用户提供本机 IP**：
+   向用户询问本机外部 IP 地址（可提示用户通过 `hostname -I` 查看）。**禁止自动执行命令获取，必须由用户确认提供**。用获取到的 IP 构建 `eval_url`，禁止使用 context 中缓存的旧 IP
+
+2. **验证服务可达性**（用实际的 eval_url 测试）：
+   ```bash
+   curl -s --connect-timeout 5 http://<实时IP>:<port>/v1/models
+   ```
+
+3. **组装完整参数并展示给用户确认**：
+   向用户展示完整的提交 JSON，包含所有字段和实际值，等待用户确认后再提交
+
+4. **参数类型检查**：
+   - `user_id` 必须为整数（非空字符串）
+   - `batch_size`、`num_concurrent`、`num_retry` 必须为整数
+   - `dry_run` 必须为布尔值
 
 ### A2 — 提交评测任务
 
@@ -249,7 +269,7 @@ curl -X POST http://110.43.160.159:5050/evaluation \
     "domain": "<NLP|MM>",
     "mode": "<mode>",
     "region": "<region>",
-    "user_id": "<user_id>",
+    "user_id": <user_id>,
     "dry_run": <dry_run>
 }'
 ```
@@ -277,7 +297,7 @@ curl -X POST http://110.43.160.159:5050/evaluation \
     "domain": "MM",
     "mode": "<FlagRelease|XLC|EmbodiedVerse|RoboTrain|quickrun>",
     "region": "<region>",
-    "user_id": "<user_id>"
+    "user_id": <user_id>
 }'
 ```
 
@@ -322,13 +342,16 @@ curl -X POST http://110.43.160.159:5050/evaluation_progress \
 | `running_dataset` | 当前运行的数据集 |
 | `running_progress` | 当前数据集内进度 |
 
-**轮询策略**：
-- 每 60 秒查询一次进度
-- 向用户报告进度变化
-- `finished == true` 时跳转到 A4 获取结果
+**轮询策略**（递增间隔 + 最大次数限制）：
+- 第 1-5 次：每 60 秒查询一次（密集期，确认任务正常运行）
+- 第 6-20 次：每 3 分钟查询一次（稳定期，减少无效查询）
+- 最多轮询 20 次（约 1 小时），超出后停止轮询
+- 每次查询向用户报告进度变化（仅在进度有变化时输出，避免刷屏）
+- `finished == true` 时立即跳转到 A4 获取结果
+- 超出 20 次未完成 → 输出 `request_id`，告知用户稍后手动查询或重新触发评测查询
 
 **进度查询失败处理**：
-- 连续 3 次网络不可达 → 告知用户平台可能异常，建议稍后手动查询或降级本地评测
+- 连续 3 次网络不可达 → 停止轮询，告知用户平台可能异常，输出 `request_id` 供后续手动查询或降级本地评测
 
 ### A4 — 获取评测结果
 
