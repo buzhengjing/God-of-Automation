@@ -255,6 +255,7 @@ def run_orchestrator(
     parallel: int = 1,
     limit: Optional[int] = None,
     dry_run: bool = False,
+    preflight: bool = False,
     logger: Optional[ProgressLogger] = None,
 ) -> Dict:
     """
@@ -269,6 +270,7 @@ def run_orchestrator(
         parallel: 并行度
         limit: 样本数限制
         dry_run: 仅打印计划不执行
+        preflight: 正式评测前用 limit=2 快速验证所有 benchmark
         logger: 日志器
 
     Returns:
@@ -302,8 +304,38 @@ def run_orchestrator(
         logger.section("DRY RUN - No execution")
         return {"dry_run": True, "benchmarks": [b['name'] for b in benchmarks]}
 
-    # 执行
+    # Preflight 预检
     ensure_dir(work_dir)
+
+    if preflight:
+        logger.section("Preflight Check (limit=2)")
+        preflight_dir = os.path.join(work_dir, 'preflight')
+        ensure_dir(preflight_dir)
+        preflight_ok = True
+        for bench in benchmarks:
+            name = bench.get('display_name', bench['name'])
+            logger.log(f"  Preflight: {name} ...")
+            r = run_single_benchmark(bench, config, preflight_dir, 2, logger)
+            detail = r['detail']
+            if isinstance(detail, list):
+                failed = any(d.get('status') == 'F' for d in detail)
+                err_msg = 'sub-benchmark failed'
+            else:
+                failed = detail.get('status') == 'F'
+                err_msg = detail.get('error', 'unknown error')
+            if failed:
+                preflight_ok = False
+                logger.log(f"  [FAIL] {name}: {err_msg}")
+            else:
+                logger.log(f"  [OK] {name}")
+
+        if not preflight_ok:
+            logger.log("[ABORT] Preflight failed. Fix errors above before running full evaluation.")
+            return {"preflight": False, "error": "Preflight check failed"}
+        else:
+            logger.log("[PASS] All benchmarks passed preflight. Starting full evaluation...")
+
+    # 执行
     all_details = []
 
     if parallel > 1 and len(benchmarks) > 1:
@@ -381,6 +413,9 @@ Examples:
   # 调试模式（小样本）
   python eval_orchestrator.py --config config.yaml --limit 5
 
+  # 预检后再全量评测
+  python eval_orchestrator.py --config config.yaml --preflight
+
   # 仅查看执行计划
   python eval_orchestrator.py --config config.yaml --dry-run
 
@@ -404,6 +439,8 @@ Examples:
                         help='并行执行的 benchmark 数量 (default: 1)')
     parser.add_argument('--limit', type=int, default=None,
                         help='限制每个 benchmark 的样本数（调试用）')
+    parser.add_argument('--preflight', action='store_true',
+                        help='正式评测前先用 limit=2 快速验证所有 benchmark')
     parser.add_argument('--dry-run', action='store_true',
                         help='仅打印执行计划，不实际运行')
     parser.add_argument('--log', type=str, default=None,
@@ -450,6 +487,7 @@ Examples:
         parallel=args.parallel,
         limit=args.limit,
         dry_run=args.dry_run,
+        preflight=args.preflight,
         logger=logger,
     )
 

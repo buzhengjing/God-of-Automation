@@ -9,8 +9,64 @@ import sys
 import json
 import traceback
 from typing import Dict, List, Optional, Any
+from urllib.parse import urlparse
+
+import requests
 
 from utils import ProgressLogger, load_config, build_detail
+
+
+def _get_model_max_len(
+    api_url: str,
+    api_key: str,
+    model_name: str,
+    logger: Optional[ProgressLogger] = None,
+) -> Optional[int]:
+    """
+    查询 /v1/models 接口获取模型的 max_model_len。
+
+    Args:
+        api_url: OpenAI 兼容 API 地址（可能带 /v1 后缀）
+        api_key: API 密钥
+        model_name: 模型名称
+
+    Returns:
+        max_model_len 整数值，失败时返回 None
+    """
+    try:
+        # 规范化 base URL：去掉末尾 /v1 或 /v1/，再拼接 /v1/models
+        base = api_url.rstrip('/')
+        if base.endswith('/v1'):
+            base = base[:-3]
+        models_url = f"{base}/v1/models"
+
+        headers = {}
+        if api_key and api_key != 'EMPTY':
+            headers['Authorization'] = f'Bearer {api_key}'
+
+        resp = requests.get(models_url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+
+        # /v1/models 返回 {"data": [{"id": "model_name", ...}, ...]}
+        for model_info in data.get('data', []):
+            if model_info.get('id') == model_name:
+                max_len = model_info.get('max_model_len')
+                if max_len is not None:
+                    return int(max_len)
+
+        # 如果只有一个模型，直接用它
+        models = data.get('data', [])
+        if len(models) == 1:
+            max_len = models[0].get('max_model_len')
+            if max_len is not None:
+                return int(max_len)
+
+    except Exception as e:
+        if logger:
+            logger.log(f"[WARN] Failed to query model max_len: {e}")
+
+    return None
 
 
 def run_evalscope_benchmark(
@@ -61,6 +117,20 @@ def run_evalscope_benchmark(
     dataset_args = {benchmark_name: benchmark_args or {}}
     if dataset_filters:
         dataset_args[benchmark_name]['filters'] = dataset_filters
+
+    # 动态调整 max_tokens，防止超出模型上下文长度
+    max_model_len = _get_model_max_len(api_url, api_key, model_name, logger)
+    if max_model_len and generation_config.get('max_tokens', 0) > 0:
+        safe_max = max_model_len - 8192  # 预留 8K 给 prompt
+        if generation_config['max_tokens'] > safe_max:
+            adjusted = max(safe_max, 1024)  # 至少保留 1024
+            if logger:
+                logger.log(
+                    f"[WARN] max_tokens {generation_config['max_tokens']} "
+                    f"exceeds model context {max_model_len}, "
+                    f"adjusting to {adjusted}"
+                )
+            generation_config = {**generation_config, 'max_tokens': adjusted}
 
     # 构建 TaskConfig
     try:
