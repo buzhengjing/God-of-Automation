@@ -50,7 +50,7 @@
 **强制按以下顺序执行，不可跳步或调换：**
 
 ```
-① container-preparation     → 容器准备（多入口自动识别）
+① container-preparation     → 容器准备（含本地权重检查 + 多入口自动识别）
 ② pre-service-inspection    → 环境检测（一次 inspect_env.py 完成）
 ③ service-startup (native)  → 关闭 FlagGems，启动 native 模式
 ④ performance-testing       → Native 性能基线
@@ -59,7 +59,7 @@
 ⑦ 自动性能对比              → flagos/native ≥ 80%?
    ├── 是 → 跳到 ⑨
    └── 否 → ⑧ operator-replacement（贪心搜索）
-⑨ [可选] eval-correctness   → 精度评测（默认跳过）
+⑨ eval-correctness           → 精度评测（询问用户是否执行）
 ⑩ 生成最终报告
 ```
 
@@ -68,7 +68,7 @@
 **强制按以下顺序执行 — 先测后升级：**
 
 ```
-① container-preparation     → 解析 README / 接入容器
+① container-preparation     → 容器准备（含本地权重检查 + 解析 README / 接入容器）
 ② pre-service-inspection    → 环境检测
 ③ service-startup (native)  → Native 模式启动
 ④ performance-testing       → Native 性能基线 → native_performance.json
@@ -79,7 +79,7 @@
 ⑨ performance-testing       → 升级后性能 → flagos_after_upgrade.json
 ⑩ 三方性能对比              → native vs before vs after
    └── 升级后 < 80% → operator-replacement
-⑪ [可选] eval-correctness   → 精度评测（默认跳过）
+⑪ eval-correctness           → 精度评测（询问用户是否执行）
 ⑫ 生成最终报告
 ```
 
@@ -96,7 +96,6 @@
 | FlagScale 仓库地址 | `https://github.com/FlagOpen/FlagScale.git` | 无需用户提供 |
 | FlagCX 仓库地址 | `https://github.com/FlagOpen/FlagCX.git` | 无需用户提供 |
 | 性能目标 | 80% of native | 不询问"目标是多少" |
-| 精度评测 | 默认跳过 | 不询问"是否执行精度评测" |
 | pip install 模式 | `pip install .`（非 editable） | 避免 `-e .` 在容器中的问题 |
 | 服务端口 | 从 README/容器配置中提取 | 不询问端口号 |
 | GPU 设备 | 使用全部可见 GPU | 不询问使用哪些卡 |
@@ -109,6 +108,7 @@
 2. **容器网络不通且需要代理配置** — 自动检测网络后才问
 3. **贪心搜索 3 轮仍未达标** — 需要用户决定是否继续
 4. **升级后性能严重劣化（<70%）** — 需要用户确认是否回退
+5. **精度评测是否执行** — 性能测试完成后，询问用户是否需要精度评测
 
 ---
 

@@ -22,9 +22,11 @@ provides:
   - service.log_path
   - service.gems_txt_path
   - service.initial_operator_list
+  - service.max_model_len
   - runtime.gpu_count
   - runtime.flaggems_enabled
   - runtime.framework
+  - runtime.thinking_model
 ---
 
 # 服务启动 Skill
@@ -79,10 +81,12 @@ service:
   log_path: <日志路径>
   gems_txt_path: <gems.txt 路径>
   initial_operator_list: [...]
+  max_model_len: <服务实际的 max_model_len>
 runtime:
   framework: <vllm|sglang>
   gpu_count: <GPU 数量>
   flaggems_enabled: true|false
+  thinking_model: true|false            # 是否为 thinking model（传递给后续评测 Skill）
 ```
 
 ---
@@ -120,6 +124,44 @@ docker exec -d $CONTAINER bash -c "cd /flagos-workspace && <startup_command> > /
 
 启动命令根据容器配置确定（flagscale serve / vllm serve / sglang launch_server）。
 
+### max_model_len 决策规则
+
+`--max-model-len` 直接决定模型单次请求能处理的最大 token 数。**如果设置过小，评测端请求的 `max_tokens` 会被服务端截断，导致推理不完整。**
+
+**决策逻辑**：
+
+1. **判断是否为 thinking model**：
+   - 模型名包含 `Qwen3` / `QwQ` / `DeepSeek-R1` / `DeepSeek-R2` → thinking model
+   - 其他 → 标准模型
+
+2. **根据模型类型选择 max_model_len**：
+
+| 模型类型 | 推荐 max_model_len | 原因 |
+|---------|-------------------|------|
+| Thinking model | **32768** 或更高 | thinking chain 需要 30000+ tokens，需留余量给 prompt |
+| 标准 LLM（性能测试） | **8192** | 性能测试使用固定 input/output 长度，够用即可 |
+| 标准 LLM（精度评测） | **8192** | 非 thinking 模型的评测 max_tokens=8192 |
+
+3. **显存约束**：
+   - `max_model_len` 越大，vLLM 预分配的 KV cache 显存越多
+   - 如果 GPU 显存不足导致 OOM，优先降低 `max_model_len`
+   - Thinking model 最低不应低于 **16384**（否则推理链严重截断）
+
+4. **具体参数**：
+
+```bash
+# Thinking model（如 Qwen3-8B）
+vllm serve <model_path> --max-model-len 32768 ...
+
+# 标准模型（性能测试场景）
+vllm serve <model_path> --max-model-len 8192 ...
+
+# 显存不足时的降级
+vllm serve <model_path> --max-model-len 16384 ...  # thinking model 最低线
+```
+
+5. **验证**：启动后 `wait_for_service.sh` 会输出实际的 `max_model_len`，确认与预期一致。如果评测场景需要 `max_tokens=30000`，则 `max_model_len` 必须 > 30000 + prompt_tokens。
+
 ## 步骤 4 — 等待服务就绪
 
 ```bash
@@ -127,6 +169,10 @@ docker exec $CONTAINER bash -c "/flagos-workspace/scripts/wait_for_service.sh --
 ```
 
 自动指数退避轮询（2s, 4s, 8s, 16s, 最大 30s），超时自动分析日志。
+
+**启动后校验**：检查 `wait_for_service.sh` 输出的 `max_model_len`：
+- 如果是 thinking model 且 `max_model_len < 32768` → 警告，建议重启并加大 `--max-model-len`
+- 如果 `max_model_len < 8192` → 评测可能出问题，必须修正
 
 ## 步骤 5 — 服务验证
 
@@ -185,8 +231,10 @@ docker exec $CONTAINER cat <gems_txt_path>
 
 | 症状 | 可能原因 | 解决方案 |
 |------|----------|----------|
-| 进程启动后立即退出 | GPU 显存不足 | 减少 tensor-parallel-size |
+| 进程启动后立即退出 | GPU 显存不足 | 减少 tensor-parallel-size 或降低 max-model-len |
 | API 无响应 | 端口被占用 | 检查 `lsof -i:$PORT` |
 | FlagGems 未生效 | toggle_flaggems.py 未正确切换 | 运行 `--action status` 检查 |
 | gems.txt 未生成 | FlagGems 未启用 | 确认 toggle 状态 |
 | 服务启动超时 | wait_for_service.sh 会自动诊断 | 查看超时输出的日志分析 |
+| Thinking model 评测分数异常低 | max_model_len 过小，推理链被截断 | 重启服务，加大 `--max-model-len` 至 32768+ |
+| OOM: max_model_len 过大 | KV cache 显存预分配超限 | 降低 max-model-len（thinking model 最低 16384） |

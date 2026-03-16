@@ -1,10 +1,12 @@
 # FlagOS Comprehensive Evaluation Configuration
 
 model:
-  name: "RoboBrain2.0-7B-metax-flagos"                                # 模型名称（必填）
+  name: "/nfs/models/Qwen3-8B/"                                # 模型名称（必填）
   type: "LLM"                             # 模型类型: LLM / VL / Omni / Robotics / ImageGen
-  api_base: "http://localhost:9010/v1"    # OpenAI 兼容 API 地址
+  api_base: "http://localhost:8000/v1"    # OpenAI 兼容 API 地址
   api_key: "EMPTY"                        # API 密钥
+  thinking: true                          # 是否为 thinking model（true 时自动覆盖 generation_config）
+                                          # 支持自动检测: Qwen3/QwQ/DeepSeek-R1 等模型名会自动启用
 
 # EvalScope 框架配置
 evalscope:
@@ -16,24 +18,26 @@ evalscope:
   stream: true                            # 流式输出
   timeout: 60000                          # 单请求超时（毫秒）
 
-# 生成配置（默认为确定性评测）
+# 生成配置 — 标准模型（确定性评测）
 generation_config:
-  max_tokens: 30000
+  max_tokens: 8192
   temperature: 0.0
   top_p: 1.0
   n: 1
 
-# thinking 模型请取消下方注释并覆盖上方配置：
-# generation_config:
-#   max_tokens: 30000
-#   temperature: 0.6
-#   top_p: 0.95
-#   top_k: 20
-#   n: 1
+# thinking 模型专用生成配置（model.thinking=true 或自动检测时使用）
+# 如设置了 model.thinking: true，以下配置会自动覆盖上方 generation_config
+thinking_generation_config:
+  max_tokens: 30000
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  n: 1
 
-# thinking 模型过滤思考内容（EvalScope 原生 benchmark 使用）：
-# dataset_filters:
-#   remove_until: "</think>"
+# thinking 模型过滤思考内容（自动启用，无需手动切换）
+# model.thinking=true 时自动添加 dataset_filters
+dataset_filters:
+  remove_until: "</think>"
 
 # 自研评测脚本配置
 custom_eval:

@@ -3,6 +3,7 @@
 性能对比工具
 
 对比多个 benchmark JSON 结果文件，生成 performance_compare.csv 和摘要报告。
+逐并发级别对比，确保每个并发级别都达标。
 
 Usage:
     python performance_compare.py --native results/native_performance.json \
@@ -18,6 +19,7 @@ Usage:
 import argparse
 import csv
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -33,9 +35,19 @@ def load_benchmark(path: str) -> Dict[str, Any]:
         return json.load(f)
 
 
+def concurrency_sort_key(key: str) -> int:
+    """concurrency_64 → 64, max → 999999"""
+    m = re.search(r'(\d+)$', key)
+    if m:
+        return int(m.group(1))
+    if 'max' in key.lower():
+        return 999999
+    return 0
+
+
 def extract_best_throughput(tc_results: Dict[str, Any]) -> Tuple[float, float, str]:
     """
-    从测试用例结果中提取最优吞吐量。
+    从测试用例结果中提取最优吞吐量（保留供摘要使用）。
 
     Returns:
         (output_throughput, total_throughput, best_concurrency_key)
@@ -59,144 +71,124 @@ def extract_best_throughput(tc_results: Dict[str, Any]) -> Tuple[float, float, s
     return best_output, best_total, best_key
 
 
+def extract_all_concurrency_throughputs(tc_results: Dict[str, Any]) -> Dict[str, Tuple[float, float]]:
+    """
+    从测试用例结果中提取每个并发级别的吞吐量。
+
+    Returns:
+        {"concurrency_1": (output_tp, total_tp), "concurrency_4": (output_tp, total_tp), ...}
+    """
+    result = {}
+    for key, metrics in tc_results.items():
+        if key.startswith("_"):
+            continue
+        if not isinstance(metrics, dict) or "error" in metrics:
+            continue
+
+        output_tp = metrics.get('Output token throughput (tok/s)', 0) or 0
+        total_tp = metrics.get('Total Token throughput (tok/s)', 0) or 0
+        result[key] = (output_tp, total_tp)
+
+    return result
+
+
 def compare_results(benchmarks: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    对比多个 benchmark 结果。
+    逐并发级别对比多个 benchmark 结果。
+
+    每个 test_case × 每个 concurrency_level 生成一行。
 
     Args:
         benchmarks: {"native": data, "flagos_initial": data, ...}
 
     Returns:
-        对比行列表，每行包含 test_case 和各 benchmark 的指标。
+        对比行列表。
     """
     # 收集所有测试用例名称
     all_test_cases = set()
-    for name, data in benchmarks.items():
+    for data in benchmarks.values():
         results = data.get("results", {})
         all_test_cases.update(results.keys())
 
     rows = []
     for tc in sorted(all_test_cases):
-        row = {"test_case": tc}
-
-        native_output_tp = 0.0
+        # 从所有 benchmark 中收集该 test_case 的并发 key 并集
+        all_conc_keys = set()
+        bm_conc_data = {}  # {bm_name: {conc_key: (output_tp, total_tp)}}
 
         for bm_name, data in benchmarks.items():
-            results = data.get("results", {})
-            tc_results = results.get(tc, {})
+            tc_results = data.get("results", {}).get(tc, {})
+            conc_data = extract_all_concurrency_throughputs(tc_results)
+            bm_conc_data[bm_name] = conc_data
+            all_conc_keys.update(conc_data.keys())
 
-            if tc_results:
-                output_tp, total_tp, best_key = extract_best_throughput(tc_results)
-                row[f"{bm_name}_output_throughput"] = output_tp
-                row[f"{bm_name}_total_throughput"] = total_tp
-                row[f"{bm_name}_best_concurrency"] = best_key
+        if not all_conc_keys:
+            continue
 
-                if bm_name == "native":
-                    native_output_tp = output_tp
-            else:
-                row[f"{bm_name}_output_throughput"] = 0
-                row[f"{bm_name}_total_throughput"] = 0
-                row[f"{bm_name}_best_concurrency"] = ""
+        # 按并发数排序
+        sorted_conc_keys = sorted(all_conc_keys, key=concurrency_sort_key)
 
-        # 计算各 flagos 版本相对于 native 的比率
-        if native_output_tp > 0:
+        # 找 native 最佳并发级别
+        native_conc = bm_conc_data.get("native", {})
+        native_best_key = ""
+        native_best_output = 0.0
+        for ck, (out_tp, _) in native_conc.items():
+            if out_tp > native_best_output:
+                native_best_output = out_tp
+                native_best_key = ck
+
+        # 生成每个并发级别的行
+        for conc_key in sorted_conc_keys:
+            row = {
+                "test_case": tc,
+                "concurrency": conc_key,
+                "concurrency_num": concurrency_sort_key(conc_key),
+                "is_best": conc_key == native_best_key,
+            }
+
+            native_output_tp = 0.0
+
             for bm_name in benchmarks:
-                if bm_name == "native":
-                    continue
-                flagos_tp = row.get(f"{bm_name}_output_throughput", 0)
-                ratio = flagos_tp / native_output_tp if native_output_tp > 0 else 0
-                row[f"{bm_name}_ratio"] = ratio
+                conc_data = bm_conc_data.get(bm_name, {})
+                if conc_key in conc_data:
+                    output_tp, total_tp = conc_data[conc_key]
+                    row[f"{bm_name}_output_throughput"] = output_tp
+                    row[f"{bm_name}_total_throughput"] = total_tp
+                    if bm_name == "native":
+                        native_output_tp = output_tp
+                else:
+                    row[f"{bm_name}_output_throughput"] = None
+                    row[f"{bm_name}_total_throughput"] = None
 
-        rows.append(row)
+            # 计算 ratio
+            if native_output_tp and native_output_tp > 0:
+                for bm_name in benchmarks:
+                    if bm_name == "native":
+                        continue
+                    flagos_tp = row.get(f"{bm_name}_output_throughput")
+                    if flagos_tp is not None:
+                        row[f"{bm_name}_ratio"] = flagos_tp / native_output_tp
+                    else:
+                        row[f"{bm_name}_ratio"] = None
+            else:
+                for bm_name in benchmarks:
+                    if bm_name != "native":
+                        row[f"{bm_name}_ratio"] = None
+
+            rows.append(row)
 
     return rows
 
 
-def save_csv(rows: List[Dict[str, Any]], output_path: str, benchmark_names: List[str]):
-    """保存对比结果到 CSV"""
-    if not rows:
-        print("WARNING: 无数据可保存")
-        return
-
-    # 构建列头
-    headers = ["test_case"]
-    for name in benchmark_names:
-        headers.append(f"{name}_output_throughput")
-        headers.append(f"{name}_total_throughput")
-        headers.append(f"{name}_best_concurrency")
-        if name != "native":
-            headers.append(f"{name}_ratio")
-
-    p = Path(output_path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(p, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=headers, extrasaction='ignore')
-        writer.writeheader()
-        for row in rows:
-            # 格式化比率为百分比
-            formatted_row = {}
-            for k, v in row.items():
-                if k.endswith("_ratio") and isinstance(v, float):
-                    formatted_row[k] = f"{v*100:.1f}%"
-                elif isinstance(v, float):
-                    formatted_row[k] = f"{v:.2f}"
-                else:
-                    formatted_row[k] = v
-            writer.writerow(formatted_row)
-
-    print(f"CSV 已保存: {output_path}")
-
-
-def print_comparison(rows: List[Dict[str, Any]], benchmark_names: List[str]):
-    """打印对比结果摘要"""
-    print(f"\n{'='*80}")
-    print("性能对比摘要")
-    print(f"{'='*80}")
-
-    # 表头
-    header = f"{'Test Case':<25}"
-    for name in benchmark_names:
-        header += f" {name:>15}"
-    for name in benchmark_names:
-        if name != "native":
-            header += f" {name+'_ratio':>15}"
-    print(header)
-    print("-" * len(header))
-
-    # 数据行
-    for row in rows:
-        line = f"{row['test_case']:<25}"
-        for name in benchmark_names:
-            tp = row.get(f"{name}_output_throughput", 0)
-            line += f" {tp:>15.2f}"
-        for name in benchmark_names:
-            if name != "native":
-                ratio = row.get(f"{name}_ratio", 0)
-                line += f" {ratio*100:>14.1f}%"
-        print(line)
-
-    # 总体判断
-    print(f"\n{'='*80}")
-    for name in benchmark_names:
-        if name == "native":
-            continue
-        ratios = [row.get(f"{name}_ratio", 0) for row in rows if row.get(f"{name}_ratio")]
-        if ratios:
-            avg_ratio = sum(ratios) / len(ratios)
-            min_ratio = min(ratios)
-            status = "PASS" if min_ratio >= 0.8 else "FAIL"
-            print(f"{name}: avg_ratio={avg_ratio*100:.1f}%, min_ratio={min_ratio*100:.1f}% [{status}]")
-
-
 def check_target(rows: List[Dict[str, Any]], benchmark_names: List[str],
                  target_ratio: float = 0.8) -> Dict[str, bool]:
-    """检查各 flagos 版本是否达标"""
+    """检查各 flagos 版本是否达标（所有有 ratio 的并发级别都必须达标）"""
     result = {}
     for name in benchmark_names:
         if name == "native":
             continue
-        ratios = [row.get(f"{name}_ratio", 0) for row in rows if row.get(f"{name}_ratio")]
+        ratios = [row[f"{name}_ratio"] for row in rows
+                  if row.get(f"{name}_ratio") is not None]
         if ratios:
             min_ratio = min(ratios)
             result[name] = min_ratio >= target_ratio
@@ -207,16 +199,15 @@ def check_target(rows: List[Dict[str, Any]], benchmark_names: List[str],
 
 def shorten_test_case(name: str) -> str:
     """将测试用例名转为简写格式: 1k_input_1k_output → 1k→1k"""
-    m = __import__('re').match(r'(\d+k?)_input_(\d+k?)_output', name)
+    m = re.match(r'(\d+k?)_input_(\d+k?)_output', name)
     if m:
         return f"{m.group(1)}\u2192{m.group(2)}"
     return name
 
 
 def print_markdown_table(rows: List[Dict[str, Any]], benchmark_names: List[str]):
-    """打印标准 markdown 格式的性能对比表格"""
+    """打印标准 markdown 格式的逐并发级别对比表格"""
 
-    # 确定列名映射
     display_names = {
         "native": "Native TPS",
         "flagos_initial": "FlagOS Initial TPS",
@@ -226,53 +217,167 @@ def print_markdown_table(rows: List[Dict[str, Any]], benchmark_names: List[str])
     }
 
     # 构建表头
-    headers = ["Test Case"]
+    headers = ["Test Case", "Concurrency"]
     for name in benchmark_names:
         headers.append(display_names.get(name, name + " TPS"))
         if name != "native":
             headers.append("Ratio")
-    headers.append("Best Concurrency")
 
     # 打印表头
     print("| " + " | ".join(headers) + " |")
     print("| " + " | ".join(["-" * max(len(h), 5) for h in headers]) + " |")
 
     # 数据行
+    prev_tc = None
     for row in rows:
         tc = shorten_test_case(row["test_case"])
-        cells = [tc]
+        conc_num = row["concurrency_num"]
+        is_best = row.get("is_best", False)
 
-        # 找最优并发（取 native 的）
-        best_conc = ""
+        # 同一用例连续行只在第一行显示名称
+        if tc == prev_tc:
+            tc_display = ""
+        else:
+            tc_display = tc
+            prev_tc = tc
+
+        cells = [tc_display, str(conc_num)]
 
         for name in benchmark_names:
-            total_tp = row.get(f"{name}_total_throughput", 0)
-            cells.append(str(int(round(total_tp))) if total_tp else "0")
+            total_tp = row.get(f"{name}_total_throughput")
+            if total_tp is not None:
+                cells.append(str(int(round(total_tp))))
+            else:
+                cells.append("")
 
             if name != "native":
-                ratio = row.get(f"{name}_ratio", 0)
-                cells.append(f"**{ratio*100:.1f}%**" if ratio else "N/A")
+                ratio = row.get(f"{name}_ratio")
+                if ratio is not None:
+                    cells.append(f"**{ratio*100:.1f}%**")
+                else:
+                    cells.append("")
 
-            if name == "native":
-                bc = row.get(f"{name}_best_concurrency", "")
-                if bc:
-                    best_conc = bc.replace("concurrency_", "")
-
-        cells.append(best_conc)
-        print("| " + " | ".join(cells) + " |")
+        # best 标记
+        line = "| " + " | ".join(cells) + " |"
+        if is_best:
+            line += "  \u2190 best"
+        print(line)
 
     # 打印汇总
     print("")
     for name in benchmark_names:
         if name == "native":
             continue
-        ratios = [row.get(f"{name}_ratio", 0) for row in rows if row.get(f"{name}_ratio")]
+        ratios = [row[f"{name}_ratio"] for row in rows
+                  if row.get(f"{name}_ratio") is not None]
         if ratios:
             avg_ratio = sum(ratios) / len(ratios)
             min_ratio = min(ratios)
             status = "PASS" if min_ratio >= 0.8 else "FAIL"
             dn = display_names.get(name, name)
             print(f"{dn}: avg_ratio={avg_ratio*100:.1f}%, min_ratio={min_ratio*100:.1f}% [{status}]")
+
+
+def print_comparison(rows: List[Dict[str, Any]], benchmark_names: List[str]):
+    """打印文本格式的逐并发级别对比"""
+    print(f"\n{'='*80}")
+    print("性能对比摘要（逐并发级别）")
+    print(f"{'='*80}")
+
+    # 表头
+    header = f"{'Test Case':<20} {'Conc':>6}"
+    for name in benchmark_names:
+        header += f" {name:>15}"
+    for name in benchmark_names:
+        if name != "native":
+            header += f" {name+'_ratio':>15}"
+    print(header)
+    print("-" * len(header))
+
+    # 数据行
+    prev_tc = None
+    for row in rows:
+        tc = row['test_case']
+        conc_num = row['concurrency_num']
+        is_best = row.get("is_best", False)
+
+        if tc == prev_tc:
+            tc_display = ""
+        else:
+            tc_display = tc
+            prev_tc = tc
+
+        line = f"{tc_display:<20} {conc_num:>6}"
+        for name in benchmark_names:
+            tp = row.get(f"{name}_output_throughput")
+            if tp is not None:
+                line += f" {tp:>15.2f}"
+            else:
+                line += f" {'':>15}"
+        for name in benchmark_names:
+            if name != "native":
+                ratio = row.get(f"{name}_ratio")
+                if ratio is not None:
+                    line += f" {ratio*100:>14.1f}%"
+                else:
+                    line += f" {'':>15}"
+
+        if is_best:
+            line += "  <- best"
+        print(line)
+
+    # 总体判断
+    print(f"\n{'='*80}")
+    for name in benchmark_names:
+        if name == "native":
+            continue
+        ratios = [row[f"{name}_ratio"] for row in rows
+                  if row.get(f"{name}_ratio") is not None]
+        if ratios:
+            avg_ratio = sum(ratios) / len(ratios)
+            min_ratio = min(ratios)
+            status = "PASS" if min_ratio >= 0.8 else "FAIL"
+            print(f"{name}: avg_ratio={avg_ratio*100:.1f}%, min_ratio={min_ratio*100:.1f}% [{status}]")
+
+
+def save_csv(rows: List[Dict[str, Any]], output_path: str, benchmark_names: List[str]):
+    """保存逐并发级别对比结果到 CSV"""
+    if not rows:
+        print("WARNING: 无数据可保存")
+        return
+
+    # 构建列头
+    headers = ["test_case", "concurrency", "concurrency_num", "is_best"]
+    for name in benchmark_names:
+        headers.append(f"{name}_output_throughput")
+        headers.append(f"{name}_total_throughput")
+        if name != "native":
+            headers.append(f"{name}_ratio")
+
+    p = Path(output_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(p, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=headers, extrasaction='ignore')
+        writer.writeheader()
+        for row in rows:
+            formatted_row = {}
+            for k, v in row.items():
+                if k not in headers:
+                    continue
+                if v is None:
+                    formatted_row[k] = ""
+                elif k.endswith("_ratio") and isinstance(v, float):
+                    formatted_row[k] = f"{v*100:.1f}%"
+                elif isinstance(v, float):
+                    formatted_row[k] = f"{v:.2f}"
+                elif isinstance(v, bool):
+                    formatted_row[k] = str(v)
+                else:
+                    formatted_row[k] = v
+            writer.writerow(formatted_row)
+
+    print(f"CSV 已保存: {output_path}")
 
 
 def main():

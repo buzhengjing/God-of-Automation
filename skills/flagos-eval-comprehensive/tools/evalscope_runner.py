@@ -134,6 +134,13 @@ def run_evalscope_benchmark(
 
     # 构建 TaskConfig
     try:
+        # 将 timeout/stream 迁移到 generation_config 内（避免 EvalScope v2.0 废弃警告）
+        gen_config = dict(generation_config)
+        if 'timeout' not in gen_config:
+            gen_config['timeout'] = evalscope_config.get('timeout', 60000)
+        if 'stream' not in gen_config:
+            gen_config['stream'] = evalscope_config.get('stream', True)
+
         # Build TaskConfig kwargs
         task_kwargs = dict(
             model=model_name,
@@ -143,9 +150,7 @@ def run_evalscope_benchmark(
             datasets=[benchmark_name],
             dataset_args=dataset_args,
             eval_batch_size=evalscope_config.get('eval_batch_size', 64),
-            generation_config=generation_config,
-            timeout=evalscope_config.get('timeout', 60000),
-            stream=evalscope_config.get('stream', True),
+            generation_config=gen_config,
             dataset_hub=evalscope_config.get('dataset_hub', 'modelscope'),
             work_dir=work_dir,
         )

@@ -284,7 +284,17 @@ cat /data/flagos-workspace/<model_name>/eval/eval_report.json
 | `--dry-run` | false | 仅打印执行计划，不实际运行 |
 | `--log` | eval_progress.log | 进度日志 |
 
+<<<<<<< HEAD
 **参数优先级**：`--dry-run` > `--preflight` > 正式执行。即 `--dry-run --preflight` 只打印计划不执行。
+=======
+```yaml
+model:
+  name: <模型名称>           # 必填
+  type: <模型类型>           # LLM / VL / Omni / Robotics / ImageGen
+  api_base: <API地址>        # OpenAI 兼容 API
+  api_key: <API密钥>         # 可选，默认 EMPTY
+  thinking: false            # 是否为 thinking model（true/false/不设置=自动检测）
+>>>>>>> 7fd1c566b849aa23cbbcd42dd3153a7081ffd214
 
 **内部执行流程**：
 1. 加载 config.yaml 和 benchmark_registry.yaml
@@ -295,15 +305,38 @@ cat /data/flagos-workspace/<model_name>/eval/eval_report.json
 6. 正式执行：逐个（或并行）运行 benchmark，调度对应 runner
 7. 汇总结果，调用 report_generator 生成 JSON + Markdown 报告
 
+<<<<<<< HEAD
 ### tools/evalscope_runner.py — EvalScope 执行器
+=======
+# 标准模式生成配置（non-thinking benchmarks 使用）
+generation_config:
+  max_tokens: 8192
+  temperature: 0.0
+
+# Thinking 模式生成配置（model.thinking=true 且 benchmark.thinking=true 时使用）
+thinking_generation_config:
+  max_tokens: 30000
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+```
+>>>>>>> 7fd1c566b849aa23cbbcd42dd3153a7081ffd214
 
 封装 EvalScope `TaskConfig` + `run_task` 调用。
 
+<<<<<<< HEAD
 关键行为：
 - 自动查询 `/v1/models` 获取 `max_model_len`，动态调整 `max_tokens`（预留 8K 给 prompt）
 - 支持 `dataset_dir` 本地缓存（离线评测）
 - 支持 `dataset_filters`（thinking 模型过滤 `</think>` 前内容）
 - 结果解析：将 EvalScope Report 对象转为 dict，递归提取 score
+=======
+定义每种模型类型对应的必测和可选 benchmark 列表，以及每个 benchmark 的执行器类型（evalscope / vlmeval / custom）、参数和 thinking 配置。
+
+**关键字段**：
+- `thinking: true/false` — 控制 thinking model 在该 benchmark 上是否启用 thinking 模式
+- `reference_scores` — 官方参考分数（用于报告中自动对比）
+>>>>>>> 7fd1c566b849aa23cbbcd42dd3153a7081ffd214
 
 ### tools/vlmeval_runner.py — VLMEvalKit 执行器
 
@@ -369,10 +402,126 @@ VL benchmark 执行器。当模型通过 API 部署时，自动 fallback 到 eva
 | `vlmeval` | `vlmeval_runner.py` → VLMEvalKit 或 fallback | VL benchmark（API 部署时 fallback 到 evalscope） |
 | `custom` | 动态加载 `custom_eval/eval_*.py` | 自研评测脚本（LiveBench、TheoremQA、Robotics 等） |
 
+<<<<<<< HEAD
 自研脚本约定：
 - 导出 `evaluate_*()` 函数
 - 签名：`(config, logger=..., limit=..., [benchmark=..., dataset_path=...]) -> detail dict`
 - 返回标准 detail dict（`status` / `dataset` / `accuracy` / `rawDetails`）
+=======
+```bash
+CONTAINER=<container_name>
+docker cp skills/flagos-eval-comprehensive/tools/. $CONTAINER:/flagos-workspace/eval/
+```
+
+### 步骤 2：安装依赖
+
+```bash
+docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
+    pip install evalscope pandas pyarrow pyyaml requests"
+```
+
+> 如需 VLMEvalKit 后端：`pip install evalscope[vlmeval]`
+
+### 步骤 2.5：一站式 Benchmark 选择 + 数据集下载（推荐）
+
+使用 `benchmark_selector.py` 交互式选择 benchmark，自动下载数据集并启动评测：
+
+```bash
+# 推荐方式：交互式选择 + 自动下载 + 评测
+docker exec -it $CONTAINER bash -c "cd /flagos-workspace/eval && \
+    python benchmark_selector.py --config config.yaml"
+
+# 非交互：仅必测项，自动下载+评测
+docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
+    python benchmark_selector.py --config config.yaml --auto"
+
+# 非交互：全选
+docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
+    python benchmark_selector.py --config config.yaml --select all"
+
+# 仅下载数据集，不启动评测
+docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
+    python benchmark_selector.py --config config.yaml --auto --no-eval"
+```
+
+也可以手动预下载数据集：
+
+```bash
+# 预下载指定 benchmark 数据集
+docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
+    python dataset_prefetch.py --model-type LLM --benchmarks mmlu,aime24 --cache-dir datasets/evalscope_cache"
+
+# 预下载某类型全部数据集
+docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
+    python dataset_prefetch.py --model-type LLM --cache-dir datasets/evalscope_cache"
+
+# 检查缓存状态
+docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
+    python dataset_prefetch.py --model-type LLM --cache-dir datasets/evalscope_cache --status"
+```
+
+> 使用 HuggingFace 镜像源：`--source huggingface --hf-mirror https://hf-mirror.com`
+
+### 步骤 3：配置模型
+
+编辑 `/flagos-workspace/eval/config.yaml`：
+
+```bash
+cat /data/flagos-workspace/<model_name>/eval/config.yaml
+```
+
+**配置检查清单**：
+- [ ] `model.name` 正确
+- [ ] `model.type` 与模型类型匹配（LLM/VL/Omni/Robotics/ImageGen）
+- [ ] `model.api_base` 可达
+- [ ] thinking 模型配置（见下方 Thinking Model 决策指南）
+
+### 步骤 4：运行评测
+
+**全量评测**：
+```bash
+docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
+    nohup python eval_orchestrator.py --config config.yaml > /dev/null 2>&1 &"
+```
+
+**仅 EvalScope 原生 benchmark**：
+```bash
+docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
+    nohup python eval_orchestrator.py --config config.yaml --skip-custom > /dev/null 2>&1 &"
+```
+
+**指定 benchmark**：
+```bash
+docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
+    python eval_orchestrator.py --config config.yaml --benchmarks mmlu,aime24,gpqa_diamond"
+```
+
+**Dry-run（查看执行计划）**：
+```bash
+docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
+    python eval_orchestrator.py --config config.yaml --dry-run"
+```
+
+### 步骤 5：监控进度
+
+```bash
+# 全局进度
+tail -f /data/flagos-workspace/<model_name>/eval/eval_progress.log
+
+# 检查进程
+docker exec $CONTAINER ps aux | grep "eval_\|evalscope"
+```
+
+### 步骤 6：获取结果
+
+```bash
+# JSON 汇总报告
+cat /data/flagos-workspace/<model_name>/eval/eval_report.json
+
+# Markdown 可读报告
+cat /data/flagos-workspace/<model_name>/eval/eval_report.md
+```
+>>>>>>> 7fd1c566b849aa23cbbcd42dd3153a7081ffd214
 
 ---
 
@@ -404,6 +553,76 @@ VL benchmark 执行器。当模型通过 API 部署时，自动 fallback 到 eva
 | 0 | 全部成功 |
 | 1 | 全部失败 |
 | 2 | 部分成功（`Partial: X ok, Y failed`） |
+
+---
+
+## Thinking Model 决策指南
+
+### 什么是 thinking model
+
+Thinking model 是指经过训练能够在回答前进行长链推理的模型（输出中包含 `<think>...</think>` 块）。典型代表：Qwen3 系列、QwQ 系列、DeepSeek-R1/R2 系列。
+
+这类模型在使用正确的推理参数时，能在数学、科学、多步推理等任务上显著提升表现。
+
+### 自动检测机制
+
+编排器 `eval_orchestrator.py` 会自动处理 thinking model：
+
+1. **模型层面检测**：根据 `model.thinking` 字段或模型名自动识别
+   - 显式设置 `model.thinking: true` → 强制启用
+   - 显式设置 `model.thinking: false` → 强制关闭
+   - 未设置 → 自动检测模型名（匹配 `qwen3`, `qwq`, `deepseek-r1` 等）
+
+2. **Benchmark 层面控制**：每个 benchmark 在 `benchmark_registry.yaml` 中有 `thinking` 字段
+   - `thinking: true` — 当模型支持 thinking 时，该 benchmark 使用 thinking 配置
+   - `thinking: false` — 该 benchmark 始终使用标准配置
+
+3. **两者结合**：只有**模型是 thinking model** 且 **benchmark.thinking=true** 时，才使用 thinking 配置
+
+### Per-Benchmark 配置差异
+
+| 配置项 | 标准模式 | Thinking 模式 | 说明 |
+|--------|---------|--------------|------|
+| `temperature` | 0.0 | 0.6 | thinking 需要采样多样性启动思考链 |
+| `max_tokens` | 8192 | 30000 | thinking chain 需要大量 token 空间 |
+| `top_p` | 1.0 | 0.95 | 配合 temperature 使用 |
+| `dataset_filters` | 无 | `remove_until: "</think>"` | 答案提取前过滤思考内容 |
+
+### 哪些 Benchmark 使用 thinking
+
+| Benchmark | thinking | 原因 |
+|-----------|----------|------|
+| MMLU | false | 多选题，不需要长推理链，thinking 会大幅增加 token 消耗但收益有限 |
+| AIME24/25 | **true** | 竞赛数学，必须充分推理 |
+| GPQA Diamond | **true** | 研究生级别科学推理 |
+| MUSR | **true** | 多步推理 |
+| MATH-500 | **true** | 数学推理 |
+| GSM8K | false | 小学数学，标准模式即可 |
+| MMLU-Pro | false | 多选题 |
+| CEVAL | false | 多选题 |
+
+### 智能体决策指导
+
+**配置 `config.yaml` 时的决策规则**：
+
+1. **判断模型是否为 thinking model**：
+   - 查看模型名或官方文档，确认模型是否具备 thinking 能力
+   - 如果确定是 → 设置 `model.thinking: true`
+   - 如果确定不是 → 设置 `model.thinking: false`（或不设置，自动检测会处理）
+   - 如果不确定 → 不设置，依赖自动检测
+
+2. **不需要手动修改 `generation_config`**：
+   - 编排器会根据 benchmark 的 `thinking` 字段自动切换配置
+   - `config.yaml` 中的 `generation_config` 作为标准模式基线
+   - `thinking_generation_config` 作为 thinking 模式参数
+
+3. **可以覆盖 benchmark 的 thinking 设置**：
+   - 如果认为某个 benchmark 的 `thinking` 字段不合适，直接修改 `benchmark_registry.yaml`
+   - 例如：如果发现 MMLU 在 thinking 模式下效果更好，可以改为 `thinking: true`
+
+4. **新增 benchmark 时**：
+   - 需要深度推理的（数学、科学、多步逻辑）→ `thinking: true`
+   - 多选/知识记忆为主的 → `thinking: false`
 
 ---
 
