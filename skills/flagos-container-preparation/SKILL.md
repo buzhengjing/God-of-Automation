@@ -30,7 +30,9 @@ provides:
 
 支持三种入口场景，自动识别用户输入类型。容器就绪后，通过 `setup_workspace.sh` 一次性部署所有工具脚本。
 
-**工具脚本**: `skills/flagos-container-preparation/tools/setup_workspace.sh`
+**工具脚本**:
+- `skills/flagos-container-preparation/tools/check_model_local.py` — 本地权重搜索
+- `skills/flagos-container-preparation/tools/setup_workspace.sh` — 一次性部署工具
 
 ---
 
@@ -84,6 +86,20 @@ gpu:
 - 包含 `/` 和 `:` 且像 registry 地址 → 镜像 → 入口 2
 - 其他字符串 → 尝试作为容器名 → 入口 1
 
+## 步骤 0.5 — 本地权重检查（自动执行）
+
+在容器准备之前，先在宿主机搜索模型权重：
+
+```bash
+python3 skills/flagos-container-preparation/tools/check_model_local.py \
+    --model "<用户输入的模型名或URL>" --output-json
+```
+
+- 找到（exit 0）→ 记录 `model.local_path`，后续 docker run 直接挂载此路径
+- 未找到（exit 1）→ 继续正常流程（下载或从 README 获取路径信息）
+
+此步骤在宿主机运行，不依赖容器。
+
 ## 入口 1 — 已有容器
 
 ```bash
@@ -127,6 +143,7 @@ bash skills/flagos-container-preparation/tools/setup_workspace.sh $CONTAINER
 
 # 完成条件
 
+- 本地权重检查已完成（check_model_local.py）
 - 入口类型已自动识别
 - GPU 厂商已识别
 - 容器已运行
