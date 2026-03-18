@@ -49,18 +49,27 @@
 
 **强制按以下顺序执行，不可跳步或调换：**
 
+**环境感知原则**：步骤②完成后判断 FlagGems 是否已启用，已启用先测 FlagOS、再测 Native；未启用则反过来。减少不必要的服务重启。
+
+**算子列表必录**：只要 FlagGems 处于启用状态，必须记录算子列表到 ops_list.json，这是算子优化的基础。
+
 ```
 ① container-preparation     → 容器准备（含本地权重检查 + 多入口自动识别）
 ② pre-service-inspection    → 环境检测（一次 inspect_env.py 完成）
-③ service-startup (native)  → 关闭 FlagGems，启动 native 模式
-④ eval-correctness (native) → 询问用户是否执行精度评测（Native 基线）
-⑤ performance-testing       → Native 性能基线
-⑥ service-startup (flagos)  → 启用 FlagGems，重启服务
-⑦ eval-correctness (flagos) → 询问用户是否执行精度评测（算子报错→自动关闭→重启→重评）
-⑧ performance-testing       → FlagOS 初始性能
+   ┌── 判断 FlagGems 是否已启用 ──┐
+   │                               │
+   ▼ [已启用 → 路径 A]             ▼ [未启用 → 路径 B]
+③A 记录算子列表（强制）          ③B service-startup (native)
+④A eval-correctness (flagos)    ④B eval-correctness (native)
+⑤A performance-testing (flagos) ⑤B performance-testing (native)
+⑥A service-startup (native)     ⑥B service-startup (flagos)
+⑦A eval-correctness (native)    ⑦B 记录算子列表（强制）
+⑧A performance-testing (native) ⑧B eval-correctness (flagos)
+   │                             ⑨B performance-testing (flagos)
+   └──────── 汇合 ───────────────┘
 ⑨ 自动性能对比              → flagos/native ≥ 80%?
    ├── 是 → 跳到 ⑪
-   └── 否 → ⑩ operator-replacement（贪心搜索）
+   └── 否 → ⑩ operator-replacement（分组二分搜索，基于已记录的算子列表）
 ⑪ 生成最终报告
 ```
 
@@ -68,22 +77,29 @@
 
 **强制按以下顺序执行 — 先测后升级：**
 
+**环境感知原则**：同 Scenario A，步骤②后判断 FlagGems 状态决定测试顺序。
+**算子列表必录**：每次 FlagGems 启用时（升级前、升级后）都必须记录算子列表。
+
 ```
 ① container-preparation     → 容器准备（含本地权重检查 + 解析 README / 接入容器）
 ② pre-service-inspection    → 环境检测
-③ service-startup (native)  → Native 模式启动
-④ eval-correctness (native) → 询问用户是否执行精度评测（Native 基线）
-⑤ performance-testing       → Native 性能基线 → native_performance.json
-⑥ service-startup (flagos)  → FlagOS 模式启动（升级前）
-⑦ eval-correctness (flagos) → 询问用户是否执行精度评测
-⑧ performance-testing       → 升级前 FlagOS 性能 → flagos_before_upgrade.json
-⑨ flag-upgrade              → FlagGems 组件升级（默认 main 分支）
-⑩ service-startup (flagos)  → 升级后 FlagOS 模式启动
-⑪ eval-correctness (flagos) → 询问用户是否执行精度评测
-⑫ performance-testing       → 升级后性能 → flagos_after_upgrade.json
-⑬ 三方性能对比              → native vs before vs after
-   └── 升级后 < 80% → operator-replacement
-⑭ 生成最终报告
+   ┌── 判断 FlagGems 是否已启用 ──┐
+   │                               │
+   ▼ [已启用 → 先测 FlagOS]        ▼ [未启用 → 先测 Native]
+③  记录算子列表（强制）/            ③ Native 性能基线
+   FlagOS 升级前性能基线             → 然后启用 FlagGems
+④  关闭 FlagGems                   ④ 记录算子列表（强制）
+   Native 性能基线                    FlagOS 升级前性能基线
+   └──────── 汇合 ─────────────────┘
+⑤ 升级前结果: native_performance.json + flagos_before_upgrade.json
+⑥ flag-upgrade              → FlagGems 组件升级（默认 main 分支）
+⑦ service-startup (flagos)  → 升级后 FlagOS 模式启动
+⑧ 记录升级后算子列表（强制） → 对比升级前后算子变化
+⑨ eval-correctness (flagos) → 询问用户是否执行精度评测
+⑩ performance-testing       → 升级后性能 → flagos_after_upgrade.json
+⑪ 三方性能对比              → native vs before vs after
+   └── 升级后 < 80% → operator-replacement（基于升级后算子列表）
+⑫ 生成最终报告
 ```
 
 ---

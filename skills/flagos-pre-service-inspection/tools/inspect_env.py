@@ -92,7 +92,27 @@ def probe_flaggems_capabilities():
         "vllm_plugin_installed": False,
         "plugin_has_dispatch": False,
         "probe_error": "",
+        "gpu_compute_capability": "",
+        "gpu_arch": "",
+        "plugin_env_vars": {},
     }
+
+    # GPU compute capability 探测
+    try:
+        import torch
+        if torch.cuda.is_available():
+            major, minor = torch.cuda.get_device_capability(0)
+            result["gpu_compute_capability"] = f"{major}.{minor}"
+            result["gpu_arch"] = f"sm_{major}{minor}"
+    except Exception:
+        pass
+
+    # Plugin dispatch 环境变量探测
+    for var in ["VLLM_FL_FLAGOS_WHITELIST", "VLLM_FL_PREFER_ENABLED",
+                "VLLM_USE_DEEP_GEMM", "VLLM_FL_DISPATCH_MODE"]:
+        val = os.environ.get(var)
+        if val is not None:
+            result["plugin_env_vars"][var] = val
 
     # 探测 FlagGems
     try:
@@ -313,6 +333,9 @@ def collect_all():
             "vllm_plugin_installed": capabilities["vllm_plugin_installed"],
             "plugin_has_dispatch": capabilities["plugin_has_dispatch"],
             "probe_error": capabilities["probe_error"],
+            "gpu_compute_capability": capabilities["gpu_compute_capability"],
+            "gpu_arch": capabilities["gpu_arch"],
+            "plugin_env_vars": capabilities["plugin_env_vars"],
             "env_vars": env_vars,
         },
         "flaggems_control": {
@@ -369,6 +392,14 @@ def output_report(data):
     report.append(f"  运行时能力:  {', '.join(insp['flaggems_capabilities']) or '无'}")
     if insp["flaggems_enable_signature"]:
         report.append(f"  enable() 签名: {insp['flaggems_enable_signature']}")
+
+    if insp.get("gpu_compute_capability"):
+        report.append(f"  GPU Compute:    {insp['gpu_compute_capability']} ({insp.get('gpu_arch', '')})")
+
+    if insp.get("plugin_env_vars"):
+        report.append(f"  Plugin 环境变量:")
+        for k, v in insp["plugin_env_vars"].items():
+            report.append(f"    {k}={v}")
 
     if ctrl["code_locations"]:
         report.append("\n  代码级扫描结果:")
