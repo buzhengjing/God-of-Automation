@@ -24,7 +24,7 @@ provides:
 支持自动化的 native vs FlagOS 性能对比，先导测试快速评估，并发搜索+增强早停，标准 markdown 表格输出。
 
 **工具脚本**（已由 setup_workspace.sh 部署到容器）:
-- `benchmark_runner.py` — 性能测试（`--concurrency-search` 自动搜索+增强早停，`--pilot` 先导测试）
+- `benchmark_runner.py` — 性能测试（`--concurrency-search` 自动搜索+增强早停）
 - `performance_compare.py` — 性能对比（`--format markdown` 标准表格输出）
 
 ---
@@ -32,45 +32,6 @@ provides:
 ## 强制约束
 
 **只能通过 `benchmark_runner.py` 执行性能测试**，禁止直接运行 `vllm bench serve`。
-
----
-
-# 先导测试策略
-
-对于首次测试或不确定性能水平时，使用三阶段策略避免浪费时间：
-
-## Phase 1：先导快速探测（~5 分钟）
-
-使用 `--pilot` 模式快速评估性能水平：
-
-```bash
-docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/benchmark_runner.py \
-  --config perf/config/perf_config.yaml \
-  --pilot \
-  --output-name pilot_native \
-  --output-dir /flagos-workspace/results/ \
-  --mode native"
-```
-
-先导测试参数：
-- 用例：1k→1k（最基础用例）
-- 并发：[1, 16, 64, 256]（4 个采样点）
-- 样本量：50 prompts/级别
-- 耗时：~5 分钟
-
-## Phase 2：决策
-
-根据先导测试结果决定：
-
-| 先导结果 | 决策 |
-|----------|------|
-| FlagOS pilot / Native pilot ≥ 90% | 直接进入 Phase 3 正式测试 |
-| 70% ≤ ratio < 90% | 进入 Phase 3，但预期可能需要算子优化 |
-| ratio < 70% | **停止**，先进行算子排查/优化，再回来测试 |
-
-## Phase 3：正式全量测试
-
-确认性能水平可接受后，运行完整测试矩阵。
 
 ---
 
@@ -355,7 +316,6 @@ docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/performan
 |------|------|
 | `--config` | 配置文件路径 |
 | `--concurrency-search` | 自动搜索最优并发（增强早停：连续2级<3% / 下降>5% / 失败） |
-| `--pilot` | 先导测试：1k→1k, 4并发点, 50 prompts，~5分钟快速评估 |
 | `--output-name` | 输出文件名（不含扩展名） |
 | `--output-dir` | 输出目录 |
 | `--mode` | 测试模式标记 |

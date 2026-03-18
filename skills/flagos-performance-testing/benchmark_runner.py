@@ -4,7 +4,6 @@ vLLM 性能基准测试工具 (重构版)
 
 基于 perf.py 重构，新增:
 - --concurrency-search: 自动搜索最优并发级别，增强早停（连续2级<3% 或 下降>5%）
-- --pilot: 先导测试模式，快速评估（1k→1k, 4并发点, 50 prompts）
 - --output-name: 指定输出文件名
 - --output-dir: 指定输出目录
 - --mode: 标记测试模式 (native/flagos_initial/flagos_optimized)
@@ -14,7 +13,6 @@ vLLM 性能基准测试工具 (重构版)
 Usage:
     python benchmark_runner.py --config config.yaml
     python benchmark_runner.py --config config.yaml --concurrency-search
-    python benchmark_runner.py --config config.yaml --pilot
     python benchmark_runner.py --output-name native_performance
     python benchmark_runner.py --test-case 1k_input_1k_output
     python benchmark_runner.py --dry-run
@@ -44,11 +42,6 @@ import yaml
 # =============================================================================
 
 DEFAULT_CONFIG_PATH = Path(__file__).parent / "config" / "perf_config.yaml"
-
-# 先导测试默认参数
-PILOT_CONCURRENCY_LEVELS = [1, 16, 64, 256]
-PILOT_NUM_PROMPTS = 50
-PILOT_TEST_CASE = "1k_input_1k_output"
 
 # 默认超时（秒）
 DEFAULT_TIMEOUT = 600
@@ -320,68 +313,6 @@ def run_concurrency_search(base_cmd: List[str], levels: List[int],
     return results
 
 
-def run_pilot_test(config: Dict[str, Any], dry_run: bool = False) -> Dict[str, Any]:
-    """
-    先导测试：快速评估性能水平。
-
-    使用 1k→1k 用例，4 个并发点 [1, 16, 64, 256]，每个 50 prompts。
-    约 5 分钟出结果，用于决策是否需要跑完整测试。
-    """
-    print("\n" + "=" * 50)
-    print("[PILOT TEST] 快速先导测试")
-    print("=" * 50)
-
-    # 找到 1k→1k 测试用例
-    test_matrix = config.get("test_matrix", [])
-    pilot_tc = None
-    for tc in test_matrix:
-        if tc["name"] == PILOT_TEST_CASE:
-            pilot_tc = tc
-            break
-
-    if not pilot_tc:
-        # 使用第一个用例作为 pilot
-        if test_matrix:
-            pilot_tc = test_matrix[0]
-            print(f"  未找到 {PILOT_TEST_CASE}, 使用 {pilot_tc['name']}")
-        else:
-            print("ERROR: test_matrix 为空")
-            return {"error": "no test cases"}
-
-    base_cmd = build_command(config, pilot_tc)
-    timeout = get_test_case_timeout(pilot_tc)
-
-    results = {}
-    best_throughput = 0.0
-    best_concurrency = PILOT_CONCURRENCY_LEVELS[0]
-
-    print(f"  用例: {pilot_tc['name']} (input={pilot_tc['input_len']}, output={pilot_tc['output_len']})")
-    print(f"  并发: {PILOT_CONCURRENCY_LEVELS}")
-    print(f"  样本量: {PILOT_NUM_PROMPTS}")
-
-    for conc in PILOT_CONCURRENCY_LEVELS:
-        metrics = run_benchmark(base_cmd, PILOT_NUM_PROMPTS, conc, dry_run, timeout)
-        results[f"concurrency_{conc}"] = metrics
-
-        if not dry_run and "error" not in metrics:
-            throughput = metrics.get('Output token throughput (tok/s)', 0) or 0
-            if throughput > best_throughput:
-                best_throughput = throughput
-                best_concurrency = conc
-
-    results["_pilot_meta"] = {
-        "test_case": pilot_tc["name"],
-        "num_prompts": PILOT_NUM_PROMPTS,
-        "levels": PILOT_CONCURRENCY_LEVELS,
-        "best_throughput": best_throughput,
-        "best_concurrency": best_concurrency,
-    }
-
-    print(f"\n  [PILOT RESULT] Best: {best_throughput:.2f} tok/s @ concurrency={best_concurrency}")
-
-    return {pilot_tc["name"]: results}
-
-
 # =============================================================================
 # 结果保存
 # =============================================================================
@@ -465,10 +396,6 @@ def print_summary(results: Dict[str, Any], mode: str = "default"):
             print(f"  Early stopped:     {meta.get('early_stopped', False)}")
             print(f"  Best concurrency:  {meta.get('best_concurrency', 'N/A')}")
 
-        # 显示先导测试信息
-        pilot_meta = tc_results.get("_pilot_meta")
-        if pilot_meta:
-            print(f"  [PILOT] prompts={pilot_meta['num_prompts']}, best={pilot_meta['best_concurrency']}")
 
 
 # =============================================================================
@@ -482,8 +409,6 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="仅打印命令")
     parser.add_argument("--concurrency-search", action="store_true",
                         help="自动搜索最优并发级别（增强早停）")
-    parser.add_argument("--pilot", action="store_true",
-                        help="先导测试：1k→1k 用例，4个并发点，快速评估")
     parser.add_argument("--output-name", help="输出文件名（不含扩展名）")
     parser.add_argument("--output-dir", help="输出目录路径（默认 /flagos-workspace/results/）",
                         default=None)
@@ -497,23 +422,6 @@ def main():
 
     if not validate_config(config):
         sys.exit(1)
-
-    # 先导测试模式
-    if args.pilot:
-        all_results = run_pilot_test(config, args.dry_run)
-
-        if not args.dry_run:
-            print_summary(all_results, f"pilot_{args.mode}")
-            output_name = args.output_name or f"pilot_{args.mode}"
-            output_path = save_results(
-                all_results, config,
-                output_name=output_name,
-                output_dir=args.output_dir,
-                mode=f"pilot_{args.mode}"
-            )
-            print(f"\n结果已保存: {output_path}")
-
-        return all_results
 
     # 筛选测试用例
     test_matrix = config["test_matrix"]
