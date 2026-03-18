@@ -33,6 +33,8 @@ provides:
 
 **只能通过 `benchmark_runner.py` 执行性能测试**，禁止直接运行 `vllm bench serve`。
 
+**快速模式触发**：当用户说"快速测试"/"走通流程"/"smoke test"/"验证流程"时，所有 benchmark 命令自动加 `--quick`。
+
 ---
 
 # Triton Cache 保护
@@ -316,6 +318,7 @@ docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/performan
 |------|------|
 | `--config` | 配置文件路径 |
 | `--concurrency-search` | 自动搜索最优并发（增强早停：连续2级<3% / 下降>5% / 失败） |
+| `--quick` | 快速模式：num_prompts=concurrency，并发取前3+末1，用于流程验证 |
 | `--output-name` | 输出文件名（不含扩展名） |
 | `--output-dir` | 输出目录 |
 | `--mode` | 测试模式标记 |

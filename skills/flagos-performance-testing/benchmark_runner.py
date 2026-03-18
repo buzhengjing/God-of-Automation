@@ -4,6 +4,7 @@ vLLM 性能基准测试工具 (重构版)
 
 基于 perf.py 重构，新增:
 - --concurrency-search: 自动搜索最优并发级别，增强早停（连续2级<3% 或 下降>5%）
+- --quick: 快速模式，num_prompts=concurrency，并发只取前3+末1，用于流程验证
 - --output-name: 指定输出文件名
 - --output-dir: 指定输出目录
 - --mode: 标记测试模式 (native/flagos_initial/flagos_optimized)
@@ -13,6 +14,7 @@ vLLM 性能基准测试工具 (重构版)
 Usage:
     python benchmark_runner.py --config config.yaml
     python benchmark_runner.py --config config.yaml --concurrency-search
+    python benchmark_runner.py --config config.yaml --quick
     python benchmark_runner.py --output-name native_performance
     python benchmark_runner.py --test-case 1k_input_1k_output
     python benchmark_runner.py --dry-run
@@ -195,8 +197,16 @@ def get_test_case_timeout(test_case: Dict[str, Any]) -> int:
     return test_case.get("timeout", DEFAULT_TIMEOUT)
 
 
+def trim_levels_for_quick(levels: List[int]) -> List[int]:
+    """快速模式：取前 3 个 + 最后 1 个并发级别"""
+    if len(levels) <= 4:
+        return levels
+    return levels[:3] + [levels[-1]]
+
+
 def run_test_case(config: Dict[str, Any], test_case: Dict[str, Any],
-                  dry_run: bool = False, concurrency_search: bool = False) -> Dict[str, Any]:
+                  dry_run: bool = False, concurrency_search: bool = False,
+                  quick: bool = False) -> Dict[str, Any]:
     """运行单个测试用例的所有并发级别"""
     base_cmd = build_command(config, test_case)
     results = {}
@@ -204,6 +214,10 @@ def run_test_case(config: Dict[str, Any], test_case: Dict[str, Any],
 
     levels = config["concurrency"]["levels"]
     final_prompts = config["concurrency"]["final_num_prompts"]
+
+    if quick:
+        levels = trim_levels_for_quick(levels)
+        return run_quick_test(base_cmd, levels, dry_run, timeout)
 
     if concurrency_search:
         # 自动搜索模式：增强早停
@@ -313,6 +327,44 @@ def run_concurrency_search(base_cmd: List[str], levels: List[int],
     return results
 
 
+def run_quick_test(base_cmd: List[str], levels: List[int],
+                   dry_run: bool = False,
+                   timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
+    """
+    快速模式：num_prompts = concurrency，不跑 final unlimited 测试。
+
+    用于流程验证和快速三版对比，不追求精确结果。
+    并发级别已由 trim_levels_for_quick() 精简为前 3 + 末 1。
+    """
+    results = {}
+    best_throughput = 0.0
+    best_concurrency = levels[0]
+
+    print(f"  [QUICK MODE] levels={levels}, num_prompts=concurrency")
+
+    for conc in levels:
+        metrics = run_benchmark(base_cmd, conc, conc, dry_run, timeout)
+        results[f"concurrency_{conc}"] = metrics
+
+        if dry_run or "error" in metrics:
+            continue
+
+        current_throughput = metrics.get('Output token throughput (tok/s)', 0) or 0
+        if current_throughput > best_throughput:
+            best_throughput = current_throughput
+            best_concurrency = conc
+
+    results["_search_meta"] = {
+        "early_stopped": False,
+        "best_concurrency": best_concurrency,
+        "best_throughput": best_throughput,
+        "tested_levels": levels,
+        "quick_mode": True,
+    }
+
+    return results
+
+
 # =============================================================================
 # 结果保存
 # =============================================================================
@@ -409,6 +461,8 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="仅打印命令")
     parser.add_argument("--concurrency-search", action="store_true",
                         help="自动搜索最优并发级别（增强早停）")
+    parser.add_argument("--quick", action="store_true",
+                        help="快速模式：num_prompts=concurrency，并发取前3+末1，用于流程验证")
     parser.add_argument("--output-name", help="输出文件名（不含扩展名）")
     parser.add_argument("--output-dir", help="输出目录路径（默认 /flagos-workspace/results/）",
                         default=None)
@@ -434,7 +488,9 @@ def main():
         test_matrix = [tc for tc in test_matrix if tc.get("enabled", True)]
 
     print(f"将运行 {len(test_matrix)} 个测试用例")
-    if args.concurrency_search:
+    if args.quick:
+        print("[模式] 快速验证（num_prompts=concurrency, 并发前3+末1）")
+    elif args.concurrency_search:
         print("[模式] 自动并发搜索 + 增强早停（连续2级<3% | 下降>5% | 失败）")
 
     # 执行测试
@@ -444,7 +500,7 @@ def main():
         tc_timeout = get_test_case_timeout(tc)
         print(f"测试用例: {tc['name']} (input={tc['input_len']}, output={tc['output_len']}, timeout={tc_timeout}s)")
         print('='*50)
-        all_results[tc["name"]] = run_test_case(config, tc, args.dry_run, args.concurrency_search)
+        all_results[tc["name"]] = run_test_case(config, tc, args.dry_run, args.concurrency_search, args.quick)
 
     # 打印摘要
     if not args.dry_run:
