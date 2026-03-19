@@ -201,6 +201,35 @@ ERQA 具身推理评测脚本。加载 Parquet 多模态数据，调用视觉语
 
 ## 步骤 A：提交远端评测任务（主流程）
 
+### A0 — 服务稳定性预检（崩溃检测）
+
+**在提交评测之前，先用一条极简 benchmark 验证服务不会崩溃。**
+
+从 context.yaml 读取服务参数，执行：
+
+```bash
+docker exec $CONTAINER bash -c "vllm bench serve \
+  --host <service_host> \
+  --port <service_port> \
+  --model <model_name> \
+  --tokenizer <tokenizer_path> \
+  --dataset-name random \
+  --random-input-len 1024 \
+  --random-output-len 15 \
+  --num-prompts 1 \
+  --endpoint /v1/completions \
+  --ignore-eos \
+  --trust-remote-code"
+```
+
+参数说明：
+- `--random-output-len 15`：极短输出，快速完成
+- `--num-prompts 1`：仅 1 条请求，耗时约几秒
+
+**结果判断**：
+- 返回码 `0` 且输出正常 → 服务稳定，继续步骤 A1
+- 返回码非 `0` 或服务崩溃 → **停止评测**，跳转到步骤 D（错误处理），检查服务日志分析原因
+
 ### A1 — 确定评测参数
 
 从 context.yaml 读取服务信息，询问用户确认或补充以下参数：
@@ -502,6 +531,10 @@ model:
   api_base: http://127.0.0.1:8000/v1  # 容器内服务地址
   api_key: EMPTY
 ```
+
+### C3.5 — 服务稳定性预检
+
+本地评测前同样执行崩溃检测（与步骤 A0 相同的命令），确保服务不会在评测过程中崩溃。
 
 ### C4 — 运行本地评测
 
