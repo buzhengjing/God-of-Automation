@@ -1,7 +1,7 @@
 ---
 name: flagos-performance-testing
-description: 性能基准测试，支持 native/flagos 对比、快速模式、并发自动搜索增强早停、per-test-case 超时、标准 markdown 输出格式
-version: 5.0.0
+description: 三版性能基准测试（Native / Full FlagGems / Optimized FlagGems），支持快速模式、并发自动搜索（饱和自动停止）、per-test-case 超时、标准 markdown 输出格式
+version: 6.0.0
 triggers:
   - 性能测试
   - benchmark
@@ -15,17 +15,22 @@ provides:
   - native_perf.result_path
   - native_perf.output_throughput
   - native_perf.total_throughput
-  - flagos_perf.initial_path
-  - flagos_perf.optimized_path
+  - flagos_full_perf.result_path
+  - flagos_optimized_perf.result_path
 ---
 
 # 性能测试 Skill
 
-支持自动化的 native vs FlagOS 性能对比，先导测试快速评估，并发搜索+增强早停，标准 markdown 表格输出。
+支持三版自动化性能测试：Native → Full FlagGems → Optimized FlagGems（如需优化），标准 markdown 三列表格输出。
+
+**三版结果文件**：
+- `native_performance.json` — Native（无 FlagGems）
+- `flagos_full.json` — Full FlagGems（全量算子）
+- `flagos_optimized.json` — Optimized FlagGems（≥80% 组合，如需优化才产出）
 
 **工具脚本**（已由 setup_workspace.sh 部署到容器）:
 - `benchmark_runner.py` — 性能测试（`--concurrency-search` 自动搜索+增强早停）
-- `performance_compare.py` — 性能对比（`--format markdown` 标准表格输出）
+- `performance_compare.py` — 性能对比（`--format markdown` 标准三列表格输出）
 
 ---
 
@@ -78,17 +83,19 @@ except Exception as e:
 
 # 工作流程
 
-## 核心原则：环境感知 + 算子列表必录
+## 核心原则：三版测试 + 按需优化
 
-**性能测试的执行顺序取决于当前环境中 FlagGems 是否已启用**，而非固定的 native → flagos 顺序。
-这样可以减少不必要的服务重启，先测当前状态，再切换测另一状态。
+新工作流按固定顺序执行三版测试：
+1. **Native**（步骤⑥）— 关闭 FlagGems 的基线性能
+2. **Full FlagGems**（步骤⑨）— 启用全量 FlagGems 的性能
+3. **Optimized FlagGems**（步骤⑫）— 仅在 Full 不达标时，通过算子优化找到 ≥80% 的组合
 
-**强制规则：只要 FlagGems 处于启用状态，就必须记录算子列表**。算子列表是后续算子优化的基础，不可遗漏。
+**算子列表必录**：只要 FlagGems 处于启用状态，必须记录算子列表到 ops_list.json，这是算子优化的基础。
 
-最终需要三个结果：
-1. **Native 性能**（不启用 FlagGems）
-2. **FlagOS 性能**（启用 FlagGems，未优化）
-3. **FlagOS 优化后性能**（通过算子替换达到 ≥ 80% native）— 仅在不达标时需要
+最终需要三个结果文件：
+1. **native_performance.json** — Native 性能
+2. **flagos_full.json** — Full FlagGems 性能
+3. **flagos_optimized.json** — Optimized FlagGems 性能（仅在不达标时产出）
 
 ## 步骤 1：同步配置
 
@@ -130,46 +137,9 @@ test_matrix:
 
 ---
 
-## 路径 A：FlagGems 已启用（先 FlagOS → 后 Native）
+## 步骤 3：运行 Native 基线测试（步骤⑥）
 
-### 步骤 A3：记录算子列表（强制）
-
-**FlagGems 启用状态下，必须先记录算子列表，这是不可或缺的。**
-
-```bash
-${CMD_PREFIX} python3 -c "
-import json, flag_gems
-flag_gems.enable()
-ops = list(flag_gems.all_registered_ops()) if hasattr(flag_gems, 'all_registered_ops') else list(flag_gems.all_ops())
-with open('/flagos-workspace/results/ops_list.json', 'w') as f:
-    json.dump(sorted(ops), f, indent=2)
-print(f'已记录 {len(ops)} 个算子到 ops_list.json')
-"
-```
-
-将算子列表写入 context.yaml：
-```yaml
-service:
-  initial_operator_list: [<算子列表>]
-  operator_count: <数量>
-```
-
-### 步骤 A4：运行 FlagOS 性能测试（当前状态，无需切换）
-
-```bash
-docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/benchmark_runner.py \
-  --config perf/config/perf_config.yaml \
-  --concurrency-search \
-  --output-name flagos_initial \
-  --output-dir /flagos-workspace/results/ \
-  --mode flagos_initial"
-```
-
-### 步骤 A5：关闭 FlagGems，切换到 Native 模式
-
-通过 `toggle_flaggems.py` 关闭 FlagGems，重启服务。
-
-### 步骤 A6：运行 Native 基线测试
+此时服务已以 native 模式启动（FlagGems 关闭）。
 
 ```bash
 docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/benchmark_runner.py \
@@ -180,30 +150,13 @@ docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/benchmark
   --mode native"
 ```
 
-### 步骤 A7：跳转到步骤 7（对比 + 优化决策）
-
----
-
-## 路径 B：FlagGems 未启用（先 Native → 后 FlagOS）
-
-### 步骤 B3：运行 Native 基线测试（当前状态，无需切换）
-
-```bash
-docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/benchmark_runner.py \
-  --config perf/config/perf_config.yaml \
-  --concurrency-search \
-  --output-name native_performance \
-  --output-dir /flagos-workspace/results/ \
-  --mode native"
-```
-
-### 步骤 B4：启用 FlagGems，切换到 FlagOS 模式
+## 步骤 4：启用全量 FlagGems，切换到 FlagOS 模式（步骤⑦）
 
 通过 `toggle_flaggems.py` 启用 FlagGems，重启服务。
 
-### 步骤 B5：记录算子列表（强制）
+## 步骤 5：记录算子列表（强制）
 
-**FlagGems 刚启用，必须立即记录算子列表。**
+**FlagGems 启用状态下，必须先记录算子列表。**
 
 ```bash
 ${CMD_PREFIX} python3 -c "
@@ -216,44 +169,38 @@ print(f'已记录 {len(ops)} 个算子到 ops_list.json')
 "
 ```
 
-### 步骤 B6：运行 FlagOS 性能测试
+## 步骤 6：运行 Full FlagGems 性能测试（步骤⑨）
 
 ```bash
 docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/benchmark_runner.py \
   --config perf/config/perf_config.yaml \
   --concurrency-search \
-  --output-name flagos_initial \
+  --output-name flagos_full \
   --output-dir /flagos-workspace/results/ \
-  --mode flagos_initial"
+  --mode flagos_full"
 ```
 
-### 步骤 B7：跳转到步骤 7（对比 + 优化决策）
-
----
-
-## 步骤 7：性能对比（标准 markdown 格式）
-
-无论走路径 A 还是 B，此时已有 `native_performance.json` 和 `flagos_initial.json`。
+## 步骤 7：性能对比（步骤⑩）
 
 ```bash
 docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/performance_compare.py \
   --native results/native_performance.json \
-  --flagos-initial results/flagos_initial.json \
+  --flagos-full results/flagos_full.json \
   --output results/performance_compare.csv \
   --target-ratio 0.8 \
   --format markdown"
 ```
 
-- 返回码 `0`：所有用例 ≥ 80%，跳到步骤 9
+- 返回码 `0`：所有用例 ≥ 80%，Optimized = Full，跳到步骤 9
 - 返回码 `1`：有不达标用例，触发步骤 8
 
-## 步骤 8：[自动] 触发算子优化
+## 步骤 8：[自动] 触发算子优化（步骤⑪）
 
-前置条件：`ops_list.json` 已存在（步骤 A3 或 B5 中已记录）。
+前置条件：`ops_list.json` 已存在（步骤 5 中已记录）。
 
 调用 `flagos-operator-replacement` 分组二分搜索。优化过程中使用已记录的算子列表作为搜索空间。
 
-优化完成后重测：
+优化完成后重测（步骤⑫）：
 
 ```bash
 docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/benchmark_runner.py \
@@ -264,7 +211,21 @@ docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/benchmark
   --mode flagos_optimized"
 ```
 
-## 步骤 9：写入 context.yaml
+## 步骤 9：三版性能对比 + 最终报告（步骤⑬）
+
+```bash
+docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/performance_compare.py \
+  --native results/native_performance.json \
+  --flagos-optimized results/flagos_optimized.json \
+  --flagos-full results/flagos_full.json \
+  --output results/performance_compare_final.csv \
+  --target-ratio 0.8 \
+  --format markdown"
+```
+
+当 Optimized = Full（全量已达标）时，只传 `--flagos-full`，不传 `--flagos-optimized`。
+
+## 步骤 10：写入 context.yaml
 
 ---
 
@@ -273,19 +234,23 @@ docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/benchmark
 | 参数 | 说明 |
 |------|------|
 | `--config` | 配置文件路径 |
-| `--concurrency-search` | 自动搜索最优并发（增强早停：连续2级<3% / 下降>5% / 失败） |
-| `--quick` | 快速模式：只跑 early_stop=false 的用例（prefill1_decode512），num_prompts=concurrency，并发到256 |
+| `--concurrency-search` | 自动搜索最优并发（饱和自动停止：连续2级<3% / 下降>5% / 失败） |
+| `--quick` | 快速模式：只跑 early_stop=false 的用例（prefill1_decode512, 1k_input_1k_output），num_prompts=concurrency，并发到256 |
 | `--output-name` | 输出文件名（不含扩展名） |
 | `--output-dir` | 输出目录 |
 | `--mode` | 测试模式标记 |
 | `--test-case` | 运行指定测试用例 |
 | `--dry-run` | 仅打印命令不执行 |
 
-### 并发搜索增强早停条件
+### 并发搜索停止条件
 
 1. **连续 2 级增长 < 3%**：吞吐趋于饱和
 2. **吞吐下降 > 5%**：已过拐点，继续加并发无意义
 3. **请求失败 > 0**：服务过载
+
+以上条件仅对 `early_stop: true` 的用例生效。`prefill1_decode512` 和 `1k_input_1k_output` 两个用例设置 `early_stop: false`，所有并发全跑，用于跨平台对比基准。
+
+搜索结果中标注**最佳并发数**（吞吐峰值对应的并发级别），不区分是否提前停止。
 
 ### 最低样本量
 
@@ -302,6 +267,7 @@ docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/benchmark
 | `--native` | 原生性能 JSON（必填） |
 | `--flagos-initial` | FlagOS 初始性能 |
 | `--flagos-optimized` | FlagOS 优化后性能 |
+| `--flagos-full` | FlagOS 全量算子性能 |
 | `--output` | CSV 输出路径 |
 | `--target-ratio` | 目标比率（默认 0.8） |
 | `--format` | 输出格式: `text`（默认） / `markdown` |
@@ -311,11 +277,11 @@ docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/benchmark
 ## 完成条件
 
 - 测试脚本已在容器中就绪
-- 当前 FlagGems 状态已判断（环境感知）
 - **算子列表已记录**（FlagGems 启用时 ops_list.json 必须存在）
 - native_performance.json 已生成
-- flagos_initial.json 已生成
+- flagos_full.json 已生成
 - 对比结果已生成（performance_compare.csv）
 - 性能比率已判断（≥ 80% 或触发算子优化）
 - 如触发优化：flagos_optimized.json 已生成
+- 最终三版对比已生成（performance_compare_final.csv）
 - context.yaml 已更新

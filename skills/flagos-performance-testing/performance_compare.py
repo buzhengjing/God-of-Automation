@@ -209,6 +209,7 @@ def print_markdown_table(rows: List[Dict[str, Any]], benchmark_names: List[str])
         "native": "Native TPS",
         "flagos_initial": "FlagOS Initial TPS",
         "flagos_optimized": "FlagOS Optimized TPS",
+        "flagos_full": "Full FlagGems TPS",
     }
 
     # 构建表头
@@ -380,6 +381,7 @@ def main():
     parser.add_argument("--native", required=True, help="原生性能结果 JSON 路径")
     parser.add_argument("--flagos-initial", help="FlagOS 初始性能结果 JSON 路径")
     parser.add_argument("--flagos-optimized", help="FlagOS 优化后性能结果 JSON 路径")
+    parser.add_argument("--flagos-full", help="FlagOS 全量算子性能结果 JSON 路径")
     parser.add_argument("--output", default="./performance_compare.csv", help="CSV 输出路径")
     parser.add_argument("--target-ratio", type=float, default=0.8, help="性能目标比率 (默认 0.8)")
     parser.add_argument("--format", choices=["text", "markdown"], default="text",
@@ -400,6 +402,10 @@ def main():
     if args.flagos_optimized:
         benchmarks["flagos_optimized"] = load_benchmark(args.flagos_optimized)
         benchmark_names.append("flagos_optimized")
+
+    if args.flagos_full:
+        benchmarks["flagos_full"] = load_benchmark(args.flagos_full)
+        benchmark_names.append("flagos_full")
 
     if len(benchmarks) < 2:
         print("ERROR: 至少需要 native + 一个 flagos 结果文件")

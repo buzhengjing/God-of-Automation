@@ -36,6 +36,7 @@ else:
 
 import argparse
 import json
+import os
 import subprocess
 import time
 from datetime import datetime
@@ -52,6 +53,7 @@ DEFAULT_TOGGLE_SCRIPT = "/flagos-workspace/scripts/toggle_flaggems.py"
 DEFAULT_BENCHMARK_SCRIPT = "/flagos-workspace/scripts/benchmark_runner.py"
 DEFAULT_OPTIMIZER_SCRIPT = "/flagos-workspace/scripts/operator_optimizer.py"
 DEFAULT_WAIT_SCRIPT = "/flagos-workspace/scripts/wait_for_service.sh"
+DEFAULT_APPLY_CONFIG_SCRIPT = "/flagos-workspace/scripts/apply_op_config.py"
 
 SERVICE_STOP_CMD = "pkill -f 'vllm\\|sglang'"
 SERVICE_WAIT_TIMEOUT = 300  # 秒
@@ -119,28 +121,146 @@ def get_next_action(state_path: str, optimizer_script: str) -> Dict[str, Any]:
         return {"action": "error", "message": str(e)}
 
 
-def apply_operator_config(enabled_ops: List[str], toggle_script: str,
+def apply_operator_config(action: Dict[str, Any],
+                          apply_config_script: str = DEFAULT_APPLY_CONFIG_SCRIPT,
+                          plugin_mode: bool = False,
+                          capabilities: Optional[List[str]] = None,
                           gems_txt_path: Optional[str] = None) -> bool:
-    """应用算子配置 — 通过 toggle_flaggems.py 更新 gems.txt"""
+    """
+    应用算子配置。
+
+    Plugin 场景：调用 apply_op_config.py 生成 env_config.sh
+    非 plugin 场景：通过 Layer 1-4 策略控制
+    """
+    if plugin_mode:
+        return _apply_plugin_config(action, apply_config_script)
+    else:
+        return _apply_non_plugin_config(action, capabilities, gems_txt_path)
+
+
+def _apply_plugin_config(action: Dict[str, Any],
+                         apply_config_script: str) -> bool:
+    """Plugin 场景：生成 env_config.sh"""
+    env_vars = action.get("env_vars", {})
+
+    if not env_vars:
+        print("  WARN: action 无 env_vars 信息，使用 full 模式")
+        result = run_cmd(f"python {apply_config_script} --mode full", check=False)
+        return result.returncode == 0
+
+    # 根据 action 类型构建 apply_op_config.py 命令
+    action_type = action.get("action", "")
+
+    if "oot" in action_type:
+        oot_bl = env_vars.get("VLLM_FL_OOT_BLACKLIST", "")
+        flagos_bl = env_vars.get("VLLM_FL_FLAGOS_BLACKLIST", "")
+        cmd_parts = [f"python {apply_config_script} --mode custom"]
+        if oot_bl:
+            cmd_parts.append(f'--oot-blacklist "{oot_bl}"')
+        if flagos_bl:
+            cmd_parts.append(f'--flagos-blacklist "{flagos_bl}"')
+        cmd = " ".join(cmd_parts)
+    else:
+        # group / linear 搜索
+        oot_bl = env_vars.get("VLLM_FL_OOT_BLACKLIST", "")
+        flagos_bl = env_vars.get("VLLM_FL_FLAGOS_BLACKLIST", "")
+        cmd_parts = [f"python {apply_config_script} --mode custom"]
+        if oot_bl:
+            cmd_parts.append(f'--oot-blacklist "{oot_bl}"')
+        if flagos_bl:
+            cmd_parts.append(f'--flagos-blacklist "{flagos_bl}"')
+        cmd = " ".join(cmd_parts)
+
+    print(f"  [Plugin] 生成 env_config.sh")
+    result = run_cmd(cmd, check=False)
+    return result.returncode == 0
+
+
+def _apply_non_plugin_config(action: Dict[str, Any],
+                              capabilities: Optional[List[str]],
+                              gems_txt_path: Optional[str]) -> bool:
+    """非 plugin 场景：Layer 1-4 分层降级"""
+    test_enabled = action.get("test_enabled_ops", [])
+    test_disabled = action.get("test_disabled_ops", [])
+    caps = capabilities or []
+
+    if "yaml_config" in caps:
+        return _apply_yaml_exclude(test_disabled)
+    elif "only_enable" in caps:
+        return _apply_only_enable(test_enabled)
+    elif "enable_unused" in caps:
+        return _apply_enable_unused(test_disabled)
+    else:
+        # Layer 4 兜底：写 txt 文件
+        return _apply_txt_fallback(test_enabled, gems_txt_path)
+
+
+def _apply_yaml_exclude(disabled_ops: List[str]) -> bool:
+    """Layer 1: YAML exclude 配置"""
+    try:
+        import flag_gems
+        import os
+        gems_path = os.path.dirname(flag_gems.__file__)
+    except ImportError:
+        print("  ERROR: flag_gems not installed")
+        return False
+
+    # 查找 vendor 配置目录
+    config_dirs = []
+    for root, dirs, files in os.walk(gems_path):
+        if "runtime" in root and "backend" in root:
+            config_dirs.append(root)
+
+    if not config_dirs:
+        print("  WARN: yaml_config 目录未找到，降级到 txt 兜底")
+        return False
+
+    config_dir = config_dirs[0]
+    config_path = os.path.join(config_dir, "enable_configs.yaml")
+    content = "exclude:\n"
+    for op in sorted(disabled_ops):
+        content += f"  - {op}\n"
+
+    with open(config_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+    print(f"  [Layer 1] YAML exclude 写入 {config_path}: {len(disabled_ops)} 个算子")
+    return True
+
+
+def _apply_only_enable(enabled_ops: List[str]) -> bool:
+    """Layer 2: only_enable API — 记录到临时文件，由 Claude Code 修改启动入口"""
+    ops_path = "/tmp/only_enable_ops.json"
+    save_json(sorted(enabled_ops), ops_path)
+    print(f"  [Layer 2] only_enable 算子列表保存到 {ops_path}: {len(enabled_ops)} 个算子")
+    print(f"  注意: 需要修改启动入口调用 flag_gems.only_enable(include=[...])")
+    return True
+
+
+def _apply_enable_unused(disabled_ops: List[str]) -> bool:
+    """Layer 3: enable(unused=) — 记录到临时文件，由 Claude Code 修改启动入口"""
+    ops_path = "/tmp/unused_ops.json"
+    save_json(sorted(disabled_ops), ops_path)
+    print(f"  [Layer 3] enable_unused 算子列表保存到 {ops_path}: {len(disabled_ops)} 个算子")
+    print(f"  注意: 需要修改启动入口调用 flag_gems.enable(unused=[...])")
+    return True
+
+
+def _apply_txt_fallback(enabled_ops: List[str], gems_txt_path: Optional[str]) -> bool:
+    """Layer 4 兜底: 直接写 txt 文件"""
     if not gems_txt_path:
         print("  WARN: 未指定 gems_txt_path，跳过算子配置")
         return True
 
-    # 写入临时算子列表
-    tmp_ops = "/tmp/search_ops.json"
-    save_json(enabled_ops, tmp_ops)
-
-    # 写入 gems.txt
-    print(f"  写入 {len(enabled_ops)} 个算子到 {gems_txt_path}")
+    print(f"  [Layer 4] 写入 {len(enabled_ops)} 个算子到 {gems_txt_path}")
     with open(gems_txt_path, 'w', encoding='utf-8') as f:
         for op in sorted(enabled_ops):
             f.write(f"{op}\n")
-
     return True
 
 
 def restart_service(stop_cmd: str, startup_cmd: str,
-                    wait_script: str, wait_timeout: int = SERVICE_WAIT_TIMEOUT) -> bool:
+                    wait_script: str, wait_timeout: int = SERVICE_WAIT_TIMEOUT,
+                    env_config_path: Optional[str] = None) -> bool:
     """重启服务：停止 → 启动 → 等待就绪"""
     print("\n[重启服务]")
 
@@ -154,9 +274,14 @@ def restart_service(stop_cmd: str, startup_cmd: str,
     run_cmd(stop_cmd, check=False)
     time.sleep(5)
 
-    # 启动
-    print("  启动服务...")
-    run_cmd(startup_cmd, check=False)
+    # 启动（plugin 场景带环境变量）
+    if env_config_path:
+        actual_cmd = f"source {env_config_path} && {startup_cmd}"
+        print(f"  启动服务（带 env_config）...")
+    else:
+        actual_cmd = startup_cmd
+        print("  启动服务...")
+    run_cmd(actual_cmd, check=False)
 
     # 等待就绪
     print(f"  等待服务就绪 (最多 {wait_timeout}s)...")
@@ -171,6 +296,30 @@ def restart_service(stop_cmd: str, startup_cmd: str,
 
     print("  服务就绪")
     return True
+
+
+def verify_ops_via_txt() -> Optional[List[str]]:
+    """重启后读取运行时 txt 文件验证算子变化"""
+    try:
+        # 导入 find_ops_list_file（假设 operator_optimizer.py 在同一目录）
+        import importlib.util
+        optimizer_path = Path(DEFAULT_OPTIMIZER_SCRIPT)
+        if optimizer_path.exists():
+            spec = importlib.util.spec_from_file_location("operator_optimizer", str(optimizer_path))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            result = mod.find_ops_list_file()
+            if result.get("found"):
+                ops = result["ops"]
+                print(f"  [验证] 运行时 txt: {result['path']} ({len(ops)} 个算子)")
+                return ops
+            else:
+                print(f"  [验证] 未找到运行时 txt 文件")
+        else:
+            print(f"  [验证] optimizer 脚本不存在: {optimizer_path}")
+    except Exception as e:
+        print(f"  [验证] 读取 txt 失败: {e}")
+    return None
 
 
 def run_benchmark_quick(perf_config: str, benchmark_script: str,
@@ -241,10 +390,14 @@ def update_optimizer_result(state_path: str, optimizer_script: str,
 def run_search_step(state_path: str, perf_config: str,
                     service_startup_cmd: str,
                     gems_txt_path: Optional[str] = None,
+                    plugin_mode: bool = False,
+                    capabilities: Optional[List[str]] = None,
+                    env_config_path: Optional[str] = None,
                     optimizer_script: str = DEFAULT_OPTIMIZER_SCRIPT,
                     benchmark_script: str = DEFAULT_BENCHMARK_SCRIPT,
                     toggle_script: str = DEFAULT_TOGGLE_SCRIPT,
-                    wait_script: str = DEFAULT_WAIT_SCRIPT) -> Dict[str, Any]:
+                    wait_script: str = DEFAULT_WAIT_SCRIPT,
+                    apply_config_script: str = DEFAULT_APPLY_CONFIG_SCRIPT) -> Dict[str, Any]:
     """执行单轮搜索步骤"""
 
     # 1. 获取下一步操作
@@ -262,13 +415,28 @@ def run_search_step(state_path: str, perf_config: str,
     print(f"\n操作: {action.get('message', action_type)}")
 
     # 2. 应用算子配置
-    test_enabled = action.get("test_enabled_ops", [])
-    if not apply_operator_config(test_enabled, toggle_script, gems_txt_path):
+    if not apply_operator_config(
+        action,
+        apply_config_script=apply_config_script,
+        plugin_mode=plugin_mode,
+        capabilities=capabilities,
+        gems_txt_path=gems_txt_path,
+    ):
         return {"action": "error", "message": "算子配置应用失败"}
 
     # 3. 重启服务
-    if not restart_service(SERVICE_STOP_CMD, service_startup_cmd, wait_script):
+    effective_env_config = env_config_path if plugin_mode else None
+    if not restart_service(SERVICE_STOP_CMD, service_startup_cmd, wait_script,
+                           env_config_path=effective_env_config):
         return {"action": "error", "message": "服务重启失败"}
+
+    # 3.5. 重启后验证算子变化
+    runtime_ops = verify_ops_via_txt()
+    if runtime_ops is not None:
+        test_disabled = action.get("test_disabled_ops", [])
+        unexpected = [op for op in test_disabled if op in runtime_ops]
+        if unexpected:
+            print(f"  [验证] 警告: {len(unexpected)} 个应禁用的算子仍在运行时 txt 中: {unexpected[:5]}")
 
     # 4. 运行 benchmark
     bench_result = run_benchmark_quick(perf_config, benchmark_script,
@@ -305,10 +473,15 @@ def run_full_search(state_path: str, perf_config: str,
                     service_startup_cmd: str,
                     max_rounds: int = 20,
                     gems_txt_path: Optional[str] = None,
+                    plugin_mode: bool = False,
+                    capabilities: Optional[List[str]] = None,
+                    env_config_path: Optional[str] = None,
                     **kwargs) -> Dict[str, Any]:
     """运行完整搜索循环"""
     print(f"\n{'#' * 60}")
     print(f"# 算子搜索开始 (最多 {max_rounds} 轮)")
+    if plugin_mode:
+        print(f"# 模式: Plugin (OOT → group 两阶段)")
     print(f"{'#' * 60}\n")
 
     search_log = []
@@ -321,7 +494,11 @@ def run_full_search(state_path: str, perf_config: str,
 
         result = run_search_step(
             state_path, perf_config, service_startup_cmd,
-            gems_txt_path=gems_txt_path, **kwargs
+            gems_txt_path=gems_txt_path,
+            plugin_mode=plugin_mode,
+            capabilities=capabilities,
+            env_config_path=env_config_path,
+            **kwargs
         )
 
         search_log.append(result)
@@ -379,11 +556,16 @@ def main():
     common.add_argument("--state-path", default=DEFAULT_STATE_PATH, help="优化器状态文件")
     common.add_argument("--perf-config", default=DEFAULT_PERF_CONFIG, help="性能测试配置")
     common.add_argument("--service-startup-cmd", required=True, help="服务启动命令")
-    common.add_argument("--gems-txt-path", help="gems.txt 路径（可选，用于写入算子列表）")
+    common.add_argument("--gems-txt-path", help="gems.txt 路径（非 plugin 兜底写入）")
+    common.add_argument("--plugin-mode", action="store_true", help="Plugin 模式（环境变量控制）")
+    common.add_argument("--capabilities", help="flaggems_capabilities（逗号分隔，非 plugin 场景）")
+    common.add_argument("--env-config-path", default="/flagos-workspace/env_config.sh",
+                        help="env_config.sh 路径（plugin 场景）")
     common.add_argument("--optimizer-script", default=DEFAULT_OPTIMIZER_SCRIPT)
     common.add_argument("--benchmark-script", default=DEFAULT_BENCHMARK_SCRIPT)
     common.add_argument("--toggle-script", default=DEFAULT_TOGGLE_SCRIPT)
     common.add_argument("--wait-script", default=DEFAULT_WAIT_SCRIPT)
+    common.add_argument("--apply-config-script", default=DEFAULT_APPLY_CONFIG_SCRIPT)
 
     # run — 完整搜索
     run_parser = subparsers.add_parser("run", parents=[common], help="运行完整搜索循环")
@@ -399,27 +581,37 @@ def main():
     args = parser.parse_args()
 
     if args.command == "run":
+        caps = args.capabilities.split(",") if args.capabilities else None
         result = run_full_search(
             args.state_path, args.perf_config,
             args.service_startup_cmd,
             max_rounds=args.max_rounds,
             gems_txt_path=args.gems_txt_path,
+            plugin_mode=args.plugin_mode,
+            capabilities=caps,
+            env_config_path=args.env_config_path,
             optimizer_script=args.optimizer_script,
             benchmark_script=args.benchmark_script,
             toggle_script=args.toggle_script,
             wait_script=args.wait_script,
+            apply_config_script=args.apply_config_script,
         )
         print(json.dumps(result, indent=2, ensure_ascii=False))
 
     elif args.command == "step":
+        caps = args.capabilities.split(",") if args.capabilities else None
         result = run_search_step(
             args.state_path, args.perf_config,
             args.service_startup_cmd,
             gems_txt_path=args.gems_txt_path,
+            plugin_mode=args.plugin_mode,
+            capabilities=caps,
+            env_config_path=args.env_config_path,
             optimizer_script=args.optimizer_script,
             benchmark_script=args.benchmark_script,
             toggle_script=args.toggle_script,
             wait_script=args.wait_script,
+            apply_config_script=args.apply_config_script,
         )
         print(json.dumps(result, indent=2, ensure_ascii=False))
 

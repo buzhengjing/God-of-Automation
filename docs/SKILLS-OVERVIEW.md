@@ -31,7 +31,7 @@
     ├── logs/                 # 操作日志
     ├── results/              # 性能数据
     │   ├── native_performance.json
-    │   ├── flagos_initial.json
+    │   ├── flagos_full.json
     │   ├── flagos_optimized.json
     │   ├── operator_config.json
     │   └── performance_compare.csv
@@ -53,31 +53,41 @@
 ### 新模型迁移发布
 
 ```
-① container-preparation     自动识别入口（已有容器/已有镜像/README）
+① container-preparation       容器准备（多入口自动识别）
         ↓
-② pre-service-inspection    环境检测 + FlagGems 深度探测
-        ↓                   → env_report.md + flag_gems_detection.md
-   ┌── 判断 FlagGems 是否已启用 ──┐
-   │                               │
-   ▼ [已启用 → 路径 A]             ▼ [未启用 → 路径 B]
-③A 记录算子列表（强制）          ③B service-startup (native)
-④A eval-correctness (flagos)    ④B eval-correctness (native)
-⑤A performance-testing (flagos) ⑤B performance-testing (native)
-⑥A service-startup (native)     ⑥B service-startup (flagos)
-⑦A eval-correctness (native)    ⑦B 记录算子列表（强制）
-⑧A performance-testing (native) ⑧B eval-correctness (flagos)
-   │                             ⑨B performance-testing (flagos)
-   └──────── 汇合 ───────────────┘
-⑨ 自动性能对比              → flagos/native ≥ 80%?
-   ├── 是 → 跳到 ⑪
-   └── 否 → ⑩ operator-replacement（分组二分搜索）
-⑪ 生成最终报告
+② pre-service-inspection      环境检测 + FlagGems/FlagTree 探测
+        ↓                     → env_report.md + flag_gems_detection.md
+③ service-startup (default)   以当前环境原样启动，验证初始环境可用
+        ↓
+④ [询问用户] 是否安装 FlagTree?
+   ├── 否 → 在当前环境进行三版测试
+   └── 是 → ④a 安装 FlagTree → ④b 重启验证
+             ├── 成功 → 在 plugin+FlagTree 环境继续
+             └── 失败 → ④c 恢复环境（重新 run 或卸载 FlagTree）
+        ↓
+⑤ eval-correctness (native)     精度评测（询问用户）
+⑥ performance-testing (native)  Native 性能基线
+⑦ service-startup (flagos)      启用全量 FlagGems
+⑧ eval-correctness (full)       精度评测（询问用户）+ 算子报错自动处理
+⑨ performance-testing (full)    Full FlagGems 性能
+⑩ [自动] 性能对比               full_flagos/native ≥ 80%?
+   ├── 是 → Optimized = Full，跳到 ⑬
+   └── 否 → ⑪ operator-replacement（分组二分搜索）
+⑫ performance-testing (optimized) Optimized FlagGems 性能
+⑬ 三版性能对比 + 生成最终报告
 ```
 
-**自动化**：步骤③~⑪无需人工干预。仅在以下情况询问用户：
+**三版结果文件**：
+- `native_performance.json` — Native（无 FlagGems）
+- `flagos_full.json` — Full FlagGems（全量算子）
+- `flagos_optimized.json` — Optimized FlagGems（≥80% 组合）
+
+**自动化**：步骤⑤~⑬大部分无需人工干预。仅在以下情况询问用户：
 - docker run 命令最终确认
+- 是否安装 FlagTree
 - 是否执行精度评测
 - 搜索 3 轮仍未达标时
+- FlagTree 安装失败时是否重新 run 容器
 
 ---
 
@@ -146,7 +156,9 @@
 | **依赖** | `flagos-pre-service-inspection` |
 | **触发词** | `service startup`, `start service`, `启动服务`, `health check` |
 
-**启动模式**：native（关闭 FlagGems）/ flagos（启用 FlagGems）/ default（原始配置）
+**启动模式**：default（原始配置，验证初始环境）/ native（关闭 FlagGems）/ flagos（启用 FlagGems）
+
+**新增**：FlagTree 安装验证逻辑 — 安装后重启服务验证，失败自动恢复
 
 ---
 
@@ -162,17 +174,17 @@
 
 ---
 
-### ⑤ flagos-performance-testing (性能测试 — 自动对比+优化触发)
+### ⑤ flagos-performance-testing (性能测试 — 三版对比+优化触发)
 
 | 属性 | 说明 |
 |------|------|
-| **功能** | 性能基准测试，支持并发自动搜索+早停、native/flagos 对比、自动优化触发 |
+| **功能** | 三版性能测试（Native/Full FlagGems/Optimized），并发自动搜索+早停、自动优化触发 |
 | **依赖** | `flagos-service-startup` |
 | **触发词** | `性能测试`, `benchmark`, `vllm bench`, `吞吐量测试` |
 
 **脚本**：
 - `benchmark_runner.py`：测试入口，支持 `--concurrency-search`、`--quick`
-- `performance_compare.py`：多结果对比 + CSV 生成
+- `performance_compare.py`：三版对比 + CSV 生成（`--flagos-full` 新增参数）
 
 ---
 
@@ -218,8 +230,10 @@
 ### 需要人工确认的环节
 
 1. docker run 命令最终确认
-2. 是否执行精度评测
-3. 搜索 3 轮仍未达标时
+2. 是否安装 FlagTree
+3. 是否执行精度评测
+4. 搜索 3 轮仍未达标时
+5. FlagTree 安装失败时是否重新 run 容器
 
 ---
 
@@ -239,25 +253,30 @@
 │ pre-service-inspection (②)  │──追加──┤
 │ + env_report.md              │        │
 │ + flag_gems_detection.md     │        │
+│ + FlagTree 探测              │        │
 └──────────────────────────────┘        │
                                         ↑
 ┌──────────────────────────────┐        │
-│ service-startup (③)          │──追加──┤
-│ (native/flagos 模式切换)      │        │
+│ service-startup (③ default)  │──追加──┤
+│ → 初始环境验证               │        │
+│ ④ FlagTree 安装（可选）      │        │
+│ → FlagTree 验证              │        │
 └──────────────────────────────┘        │
          │                              ↑
          ↓                              │
 ┌──────────────────────────────┐        │
-│ performance-testing (⑤)      │──追加──┘
+│ performance-testing (⑥⑨⑫)   │──追加──┘
 │ + benchmark_runner.py        │
 │ + performance_compare.py     │
-│ → results/*.json             │
+│ → native_performance.json    │
+│ → flagos_full.json           │
+│ → flagos_optimized.json      │
 │ → performance_compare.csv    │
 └──────────────────────────────┘
          │
          ↓ (< 80% 自动触发)
 ┌──────────────────────────────┐
-│ operator-replacement (⑥)    │
+│ operator-replacement (⑪)    │
 │ + operator_optimizer.py      │
 │ + operator_search.py         │
 │ → operator_config.json       │
@@ -266,9 +285,26 @@
 独立工具:
 ┌──────────────────┐  ┌──────────────────┐
 │ eval-correctness │  │ log-analyzer (⑦) │
-│ (④) 询问用户     │  │ + 失败恢复指引    │
+│ (⑤⑧) 询问用户   │  │ + 失败恢复指引    │
 └──────────────────┘  └──────────────────┘
 ```
+
+---
+
+## FlagTree 说明
+
+**FlagTree** 是统一 Triton 编译器，替换原版 `triton` 包（`import triton` 仍然生效）。
+
+| 属性 | 说明 |
+|------|------|
+| **仓库** | https://github.com/flagos-ai/FlagTree |
+| **版本** | 0.4.0 (Triton 3.1), 0.4.0+3.2, 0.4.0+3.3, 0.4.1+3.5 |
+| **NVIDIA 安装** | `pip install flagtree==0.4.0 --index-url=https://resource.flagos.net/repository/flagos-pypi-hosted/simple` |
+| **源码编译** | `export FLAGTREE_BACKEND=${backend_name} && cd python && pip install . --no-build-isolation -v` |
+| **支持厂商** | NVIDIA, AMD, Ascend, Cambricon, Iluvatar, MooreThreads, KLX, MetaX, HYGON, Tsingmicro, Enflame |
+| **安装脚本** | `install_flagtree.sh install\|uninstall\|verify` |
+
+在工作流步骤④中，系统会询问用户是否安装 FlagTree。安装通过 `install_flagtree.sh` 自动完成。
 
 ---
 
@@ -309,7 +345,7 @@ tail -f /data/flagos-workspace/<model>/output/**/*.log
 
 # 查看性能测试结果
 cat /data/flagos-workspace/<model>/results/native_performance.json
-cat /data/flagos-workspace/<model>/results/flagos_initial.json
+cat /data/flagos-workspace/<model>/results/flagos_full.json
 cat /data/flagos-workspace/<model>/results/performance_compare.csv
 
 # 查看报告

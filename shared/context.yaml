@@ -111,7 +111,40 @@ inspection:
   vendor_config_path: ""    # 厂商默认配置文件路径（如存在）
   vllm_plugin_installed: false  # 是否安装了 vllm-plugin-FL
   plugin_has_dispatch: false    # vllm-plugin-FL 是否有 OpManager 调度
+  oot_ops: []                   # OOT 算子列表 (来自 plugin 探测)
   env_vars: {}              # flag 相关环境变量 (USE_FLAGGEMS, USE_FLAGOS 等)
+
+# ============================================================================
+# Plugin 控制信息 (由 pre-service-inspection 写入)
+# ============================================================================
+plugin_control:
+  prefer_enabled: ""            # VLLM_FL_PREFER_ENABLED 当前值
+  oot_enabled: ""               # VLLM_FL_OOT_ENABLED 当前值
+  oot_ops: []                   # 已注册的 OOT 算子列表
+  flagos_whitelist: ""          # 当前 VLLM_FL_FLAGOS_WHITELIST
+  flagos_blacklist: ""          # 当前 VLLM_FL_FLAGOS_BLACKLIST
+  oot_blacklist: ""             # 当前 VLLM_FL_OOT_BLACKLIST
+  dispatch_mode: ""             # flagos | vendor | reference
+
+# ============================================================================
+# FlagTree 信息 (由 pre-service-inspection 写入)
+# ============================================================================
+flagtree:
+  installed: false          # 是否已安装
+  version: ""               # FlagTree 版本
+  triton_version: ""        # 对应 Triton 版本
+  install_method: ""        # pip | source | pre_installed
+  backend: ""               # nvidia | ascend | ...
+
+# ============================================================================
+# 环境状态 (由 service-startup 写入)
+# ============================================================================
+environment:
+  has_plugin: false          # 是否有 vllm-plugin-FL
+  has_flagtree: false        # 是否有 FlagTree
+  flagtree_installed_by_us: false  # 是否由本流程安装的 FlagTree
+  initial_env_verified: false      # 初始环境是否验证通过
+  flagtree_env_verified: false     # FlagTree 环境是否验证通过
 
 # ============================================================================
 # FlagGems 启停方法 (由 pre-service-inspection 探测写入)
@@ -160,9 +193,10 @@ eval:
 # ============================================================================
 operator_replacement:
   replaced_operators: []    # 已替换/排除的算子列表
-  replacement_mode: ""      # yaml_config | only_enable | enable_unused | source_edit
+  replacement_mode: ""      # yaml_config | only_enable | enable_unused | source_edit | plugin_env
   final_gems_txt: ""        # 最终 gems.txt 内容/路径
   config_file_path: ""      # YAML 配置模式下的文件路径
+  env_config_path: ""       # Plugin 模式下的 env_config.sh 路径
   available_ops: []         # 查询到的完整可用算子列表
   rollback_info: ""         # 如何还原此次替换操作
 
@@ -175,11 +209,20 @@ native_perf:
   total_throughput: 0         # Total token throughput (tok/s)
 
 # ============================================================================
-# FlagOS 性能 (由 performance-testing 写入)
+# FlagOS Full 性能 (由 performance-testing 写入)
 # ============================================================================
-flagos_perf:
-  initial_path: ""            # flagos_initial.json 路径
-  optimized_path: ""          # flagos_optimized.json 路径
+flagos_full_perf:
+  result_path: ""             # flagos_full.json 路径
+  output_throughput: 0
+  total_throughput: 0
+
+# ============================================================================
+# FlagOS Optimized 性能 (由 performance-testing 写入)
+# ============================================================================
+flagos_optimized_perf:
+  result_path: ""             # flagos_optimized.json 路径
+  output_throughput: 0
+  total_throughput: 0
 
 # ============================================================================
 # 算子优化 (由 operator-replacement 写入)
@@ -187,8 +230,12 @@ flagos_perf:
 optimization:
   target_ratio: 0.8           # 性能目标: FlagOS / Native >= 80%
   current_ratio: 0            # 当前性能比
+  search_phase: ""            # oot | group | done
+  plugin_mode: false          # 是否使用 plugin 环境变量控制
   enabled_ops: []             # 当前启用的算子列表
   disabled_ops: []            # 当前禁用的算子列表
+  oot_blacklist: []           # OOT 层需禁用的算子
+  flagos_blacklist: []        # torch 底层需禁用的算子
   operator_config_path: ""    # operator_config.json 路径
   search_log: []              # 搜索历史记录
 

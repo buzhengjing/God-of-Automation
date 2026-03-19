@@ -36,29 +36,41 @@
 
 **强制按以下顺序执行，不可跳步或调换：**
 
-**环境感知原则**：步骤②完成后判断 FlagGems 是否已启用，已启用先测 FlagOS、再测 Native；未启用则反过来。减少不必要的服务重启。
+**核心变更**：拿到环境后先验证初始服务可用，检测 plugin 和 FlagTree，再决定是否安装 FlagTree，最后进行三版性能测试。
 
-**算子列表必录**：只要 FlagGems 处于启用状态，必须记录算子列表到 ops_list.json，这是算子优化的基础。
+**三版测试**：Native → Optimized FlagGems（≥80%）→ Full FlagGems
 
 ```
-① container-preparation     → 容器准备（含本地权重检查 + 多入口自动识别）
-② pre-service-inspection    → 环境检测（一次 inspect_env.py 完成）
-   ┌── 判断 FlagGems 是否已启用 ──┐
-   │                               │
-   ▼ [已启用 → 路径 A]             ▼ [未启用 → 路径 B]
-③A 记录算子列表（强制）          ③B service-startup (native)
-④A eval-correctness (flagos)    ④B eval-correctness (native)
-⑤A performance-testing (flagos) ⑤B performance-testing (native)
-⑥A service-startup (native)     ⑥B service-startup (flagos)
-⑦A eval-correctness (native)    ⑦B 记录算子列表（强制）
-⑧A performance-testing (native) ⑧B eval-correctness (flagos)
-   │                             ⑨B performance-testing (flagos)
-   └──────── 汇合 ───────────────┘
-⑨ 自动性能对比              → flagos/native ≥ 80%?
-   ├── 是 → 跳到 ⑪
-   └── 否 → ⑩ operator-replacement（分组二分搜索，基于已记录的算子列表）
-⑪ 生成最终报告
+① container-preparation       → 容器准备（含本地权重检查 + 多入口自动识别）
+② pre-service-inspection      → 环境检测（新增 FlagTree/plugin 探测）
+③ service-startup (default)   → 以当前环境原样启动服务，验证初始环境可用
+④ [询问用户] 是否安装 FlagTree?
+   ├── 否 → 在当前环境进行三版测试
+   └── 是 → ④a 安装 FlagTree → ④b 重启服务验证
+             ├── 成功 → 在 plugin+FlagTree 环境进行三版测试
+             └── 失败 → ④c 恢复环境（重新 run 容器 或 卸载 FlagTree）
+                        → 在初始环境进行三版测试
+⑤ eval-correctness (native)     → 精度评测（询问用户）
+⑥ performance-testing (native)  → Native 性能基线（关闭 FlagGems）
+⑦ service-startup (flagos)      → 启用全量 FlagGems
+⑧ eval-correctness (full-flagos)→ 精度评测（询问用户）+ 算子报错自动处理
+⑨ performance-testing (full)    → Full FlagGems 性能
+⑩ [自动] 性能对比               → full_flagos/native ≥ 80%?
+   ├── 是 → Optimized = Full，跳到 ⑬
+   └── 否 → ⑪ operator-replacement（分组二分搜索）
+             → 找到 ≥80% 的算子组合
+⑫ performance-testing (optimized) → Optimized FlagGems 性能（搜索过程中已产出）
+⑬ 三版性能对比 + 生成最终报告
 ```
+
+**三版结果文件**：
+- `native_performance.json` — Native（无 FlagGems）
+- `flagos_full.json` — Full FlagGems（全量算子）
+- `flagos_optimized.json` — Optimized FlagGems（≥80% 组合）
+
+**FlagTree 安装失败恢复策略**：
+1. **优先方案**：重新 `docker run` 一个新容器（最可靠，一步还原全部环境），需用户确认
+2. **备选方案**（特殊环境如阿里云不能重启时）：`install_flagtree.sh uninstall` 卸载 FlagTree 恢复原始 triton
 
 ---
 
@@ -69,6 +81,9 @@
 | 决策项 | 默认值 | 说明 |
 |--------|--------|------|
 | FlagGems 仓库地址 | `https://github.com/FlagOpen/FlagGems.git` | 无需用户提供 |
+| FlagTree 仓库地址 | `https://github.com/flagos-ai/FlagTree` | 无需用户提供 |
+| FlagTree 默认版本 | `0.4.0` | NVIDIA 免编译安装 |
+| FlagTree 安装源 | `https://resource.flagos.net/repository/flagos-pypi-hosted/simple` | pip index-url |
 | 性能目标 | 80% of native | 不询问"目标是多少" |
 | pip install 模式 | `pip install .`（非 editable） | 避免 `-e .` 在容器中的问题 |
 | 服务端口 | 从 README/容器配置中提取 | 不询问端口号 |
@@ -76,12 +91,14 @@
 
 ---
 
-## 仅在以下情况询问用户（全流程预期 ≤3 次交互）
+## 仅在以下情况询问用户（全流程预期 ≤5 次交互）
 
 1. **docker run 命令最终确认** — 不可逆操作，需用户确认参数
 2. **容器网络不通且需要代理配置** — 自动检测网络后才问
 3. **搜索 3 轮仍未达标** — 需要用户决定是否继续
-4. **精度评测是否执行** — FlagOS 服务启动后、性能测试前，询问用户是否需要精度评测
+4. **精度评测是否执行** — 服务启动后、性能测试前，询问用户是否需要精度评测
+5. **是否安装 FlagTree** — 步骤④，初始环境验证通过后询问
+6. **FlagTree 安装失败时，是否重新 run 容器** — 恢复环境需用户确认
 
 ---
 
@@ -103,6 +120,7 @@ bash skills/flagos-container-preparation/tools/setup_workspace.sh $CONTAINER
 - `operator_optimizer.py` — 算子优化
 - `operator_search.py` — 算子搜索编排
 - `eval_monitor.py` — 评测监控
+- `install_flagtree.sh` — FlagTree 安装/卸载/验证
 
 ---
 
@@ -122,16 +140,17 @@ bash skills/flagos-container-preparation/tools/setup_workspace.sh $CONTAINER
 使用 `python performance_compare.py --format markdown` 生成标准 markdown 表格：
 
 ```
-| Test Case | Concurrency | Native TPS | FlagOS Initial TPS | Ratio      |
-| --------- | ----------- | ---------- | ------------------ | ---------- |
-| 1k→1k     | 256         | 17328      | 17511              | **101.1%** |
+| Test Case | Concurrency | Native TPS | Optimized TPS | Opt/Nat    | Full TPS   | Full/Nat   |
+| --------- | ----------- | ---------- | ------------- | ---------- | ---------- | ---------- |
+| 1k→1k     | 256         | 17328      | 16800         | **97.0%**  | 17511      | **101.1%** |
 ```
 
 格式规则：
 - TPS 列使用 Total Token throughput（input + output）
 - Test Case 使用简写 `1k→1k` 而非 `1k_input_1k_output`
 - Ratio 列加粗显示
-- 列：Native / FlagOS Initial / FlagOS Optimized（优化后才有第三列）
+- 三版列：Native / Optimized FlagGems / Full FlagGems
+- 当 Optimized = Full（全量已达标）时，Optimized 列显示 "= Full"
 
 ---
 
@@ -139,8 +158,9 @@ bash skills/flagos-container-preparation/tools/setup_workspace.sh $CONTAINER
 
 1. **性能测试只能通过 `benchmark_runner.py` 执行**，禁止直接运行 `vllm bench serve`
 2. **FlagGems 开关只能通过 `toggle_flaggems.py` 切换**，禁止手动 sed
-3. **所有操作在 `/flagos-workspace` 目录下执行**，确保日志可从宿主机访问
-4. **context.yaml 是 Skill 间共享状态**，每个 Skill 完成后必须更新
+3. **FlagTree 安装只能通过 `install_flagtree.sh` 执行**，禁止手动 pip install flagtree
+4. **所有操作在 `/flagos-workspace` 目录下执行**，确保日志可从宿主机访问
+5. **context.yaml 是 Skill 间共享状态**，每个 Skill 完成后必须更新
 
 ---
 

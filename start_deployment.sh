@@ -27,17 +27,21 @@ claude "
 
 ### 工作流（新模型迁移发布）
 \`\`\`
-① container-preparation     → 自动识别入口
-② pre-service-inspection    → 环境检测 + FlagGems 探测 + 报告
-③ service-startup (native)  → 关闭 FlagGems 启动服务
-④ eval-correctness (native) → 询问用户是否执行精度评测
-⑤ performance-testing       → 原生性能基线测试
-⑥ service-startup (flagos)  → 启用 FlagGems 启动服务
-⑦ eval-correctness (flagos) → 询问用户是否执行精度评测
-⑧ performance-testing       → FlagOS 性能测试
-⑨ [自动] 性能对比           → 是否 ≥ 80% native?
-⑩ [条件] operator-replacement → 性能不达标时自动优化
-⑪ 生成最终报告              → final_report.md
+① container-preparation       → 容器准备（多入口自动识别）
+② pre-service-inspection      → 环境检测 + FlagTree/plugin 探测
+③ service-startup (default)   → 以当前环境原样启动，验证初始环境可用
+④ [询问用户] 是否安装 FlagTree?
+   ├── 否 → 跳过
+   └── 是 → 安装 FlagTree + 重启验证（失败自动恢复）
+⑤ eval-correctness (native)   → 询问用户是否执行精度评测
+⑥ performance-testing (native) → Native 性能基线
+⑦ service-startup (flagos)    → 启用全量 FlagGems
+⑧ eval-correctness (full)     → 询问用户是否执行精度评测
+⑨ performance-testing (full)  → Full FlagGems 性能
+⑩ [自动] 性能对比             → full/native ≥ 80%?
+⑪ [条件] operator-replacement → 性能不达标时自动优化
+⑫ performance-testing (opt)   → Optimized FlagGems 性能
+⑬ 三版性能对比 + 最终报告     → final_report.md
 \`\`\`
 
 3. 通过 shared/context.yaml 在 Skills 间传递上下文
@@ -47,8 +51,10 @@ claude "
 - 能自动判断的不问用户（GPU 检测、入口类型、性能对比）
 - 仅在以下情况询问用户：
   - docker run 命令最终确认（安全考虑）
+  - 是否安装 FlagTree
   - 是否执行精度评测
   - 搜索 3 轮仍未达标时
+  - FlagTree 安装失败时是否重新 run 容器
 - 每个 Skill 的详细步骤在 skills/<skill-name>/SKILL.md
 - 遇到问题时使用 flagos-log-analyzer 诊断
 

@@ -58,6 +58,19 @@ from typing import Any, Dict, List, Optional, Set
 # 算子分组定义
 # =============================================================================
 
+# =============================================================================
+# OOT 高层算子（plugin 场景独立控制）
+# =============================================================================
+
+OOT_OPERATORS = [
+    "silu_and_mul",      # SiLU 激活 + 逐元素乘
+    "rms_norm",          # RMS 归一化
+    "rotary_embedding",  # 旋转位置编码
+    "fused_moe",         # 融合 MoE
+    "attention_backend", # Attention 实现选择
+]
+
+
 OPERATOR_GROUPS = {
     "compute": [
         "addmm", "mm", "bmm", "linear", "matmul",
@@ -285,6 +298,9 @@ def init_optimization(ops_file: str, native_throughput: float,
                       target_ratio: float = 0.8,
                       runtime_ops_file: Optional[str] = None,
                       group_search: bool = True,
+                      plugin_mode: bool = False,
+                      oot_ops: Optional[List[str]] = None,
+                      env_config_path: str = "/flagos-workspace/env_config.sh",
                       state_path: Optional[str] = None) -> Dict[str, Any]:
     """
     初始化优化状态。
@@ -295,6 +311,9 @@ def init_optimization(ops_file: str, native_throughput: float,
         target_ratio: 性能目标比率
         runtime_ops_file: 运行时实际调用的算子列表 JSON（可选）
         group_search: 启用分组二分搜索（默认 True）
+        plugin_mode: 是否为 plugin 场景（使用环境变量控制）
+        oot_ops: 自定义 OOT 算子列表（默认使用 OOT_OPERATORS）
+        env_config_path: env_config.sh 输出路径
     """
     with open(ops_file, "r", encoding="utf-8") as f:
         ops_data = json.load(f)
@@ -336,6 +355,20 @@ def init_optimization(ops_file: str, native_throughput: float,
             "group_results": {},  # group_name -> "all_disabled" | "binary_searched"
         }
 
+    # Plugin 场景：OOT 搜索阶段
+    effective_oot_ops = oot_ops if oot_ops else list(OOT_OPERATORS)
+    oot_state = {}
+    search_phase = "group"  # 默认直接进入 group 搜索
+
+    if plugin_mode:
+        search_phase = "oot"  # plugin 场景先搜索 OOT 层
+        oot_state = {
+            "tested": [],
+            "blacklist": [],
+            "current_idx": 0,
+            "ops": effective_oot_ops,
+        }
+
     state = {
         "all_ops": all_ops,
         "search_ops": search_ops,
@@ -347,6 +380,12 @@ def init_optimization(ops_file: str, native_throughput: float,
         "search_log": [],
         "status": "in_progress",
         "search_mode": "group" if group_search else "linear",
+        "search_phase": search_phase,  # oot -> group -> done
+        "plugin_mode": plugin_mode,
+        "oot_state": oot_state,
+        "oot_blacklist": [],
+        "flagos_blacklist": [],
+        "env_config_path": env_config_path,
         "group_state": group_state,
         "groups": groups,
         "current_step": 0,
@@ -358,6 +397,9 @@ def init_optimization(ops_file: str, native_throughput: float,
 
     print(f"优化已初始化: {len(all_ops)} 个算子, 搜索范围 {len(search_ops)} 个")
     print(f"搜索模式: {'分组二分' if group_search else '线性'}")
+    if plugin_mode:
+        print(f"Plugin 模式: OOT 算子 {len(effective_oot_ops)} 个 ({', '.join(effective_oot_ops)})")
+        print(f"搜索阶段: OOT -> group -> done")
     if group_search:
         for gname, gops in groups.items():
             print(f"  {gname}: {len(gops)} 个算子 ({', '.join(gops[:5])}{'...' if len(gops) > 5 else ''})")
@@ -365,6 +407,71 @@ def init_optimization(ops_file: str, native_throughput: float,
     print(f"目标吞吐量: {native_throughput * target_ratio:.2f} tok/s")
 
     return state
+
+
+# =============================================================================
+# OOT 层搜索（plugin 场景专用）
+# =============================================================================
+
+def get_next_action_oot(state: Dict[str, Any], state_path: Optional[str] = None) -> Dict[str, Any]:
+    """OOT 层逐个排查的下一步操作"""
+    oot = state.get("oot_state", {})
+    oot_ops = oot.get("ops", OOT_OPERATORS)
+    idx = oot.get("current_idx", 0)
+
+    if idx >= len(oot_ops):
+        # OOT 搜索完成，生成累积 blacklist 后的验证动作
+        oot_blacklist = oot.get("blacklist", [])
+        if oot_blacklist:
+            # 需要用累积的 OOT blacklist 做一次验证
+            state["oot_blacklist"] = oot_blacklist
+            state["search_phase"] = "oot_verify"
+            state["current_step"] += 1
+            save_state(state, state_path)
+
+            env_vars = {
+                "VLLM_FL_PREFER_ENABLED": "true",
+                "VLLM_FL_OOT_BLACKLIST": ",".join(oot_blacklist),
+            }
+            return {
+                "action": "test_oot_cumulative",
+                "oot_blacklist": oot_blacklist,
+                "step": state["current_step"],
+                "env_vars": env_vars,
+                "env_config_cmd": f"source {state.get('env_config_path', '/flagos-workspace/env_config.sh')}",
+                "message": f"OOT 累积验证: 禁用 {len(oot_blacklist)} 个 OOT 算子 ({', '.join(oot_blacklist)})",
+            }
+        else:
+            # 无需禁用任何 OOT 算子，直接进入 group 阶段
+            state["search_phase"] = "group"
+            save_state(state, state_path)
+            return get_next_action_group(state, state_path)
+
+    current_op = oot_ops[idx]
+    state["current_step"] += 1
+    state["current_op"] = current_op
+    save_state(state, state_path)
+
+    env_vars = {
+        "VLLM_FL_PREFER_ENABLED": "true",
+        "VLLM_FL_OOT_BLACKLIST": current_op,
+    }
+    # 如果之前已有 OOT blacklist，合并
+    existing_bl = oot.get("blacklist", [])
+    if existing_bl:
+        all_bl = existing_bl + [current_op]
+        env_vars["VLLM_FL_OOT_BLACKLIST"] = ",".join(all_bl)
+
+    return {
+        "action": "test_oot_disable",
+        "op": current_op,
+        "step": state["current_step"],
+        "total_oot_ops": len(oot_ops),
+        "oot_progress": f"{idx + 1}/{len(oot_ops)}",
+        "env_vars": env_vars,
+        "env_config_cmd": f"source {state.get('env_config_path', '/flagos-workspace/env_config.sh')}",
+        "message": f"测试禁用 OOT 算子 {current_op} ({idx + 1}/{len(oot_ops)})",
+    }
 
 
 # =============================================================================
@@ -469,7 +576,7 @@ def get_next_action_linear(state: Dict[str, Any], state_path: Optional[str] = No
 
 
 def get_next_action(state_path: Optional[str] = None) -> Dict[str, Any]:
-    """获取下一步操作指令（自动选择搜索模式）"""
+    """获取下一步操作指令（自动选择搜索模式和阶段）"""
     state = load_state(state_path)
 
     if state["status"] == "completed":
@@ -479,10 +586,37 @@ def get_next_action(state_path: Optional[str] = None) -> Dict[str, Any]:
     if state["status"] == "not_started":
         return {"action": "error", "message": "请先执行 init"}
 
-    if state.get("search_mode") == "group":
+    search_phase = state.get("search_phase", "group")
+
+    # OOT 阶段（plugin 场景）
+    if search_phase == "oot":
+        return get_next_action_oot(state, state_path)
+    elif search_phase == "oot_verify":
+        # 累积验证已完成，根据结果决定下一步（由 update 处理）
+        # 如果还在 oot_verify 说明 update 后没切换，进入 group
+        state["search_phase"] = "group"
+        save_state(state, state_path)
         return get_next_action_group(state, state_path)
+
+    # group / linear 阶段
+    if state.get("search_mode") == "group":
+        action = get_next_action_group(state, state_path)
     else:
-        return get_next_action_linear(state, state_path)
+        action = get_next_action_linear(state, state_path)
+
+    # Plugin 模式：在 action 中附加环境变量信息
+    if state.get("plugin_mode") and action.get("action") not in ("completed", "failed", "error"):
+        oot_bl = state.get("oot_blacklist", [])
+        flagos_bl = action.get("test_disabled_ops", [])
+        env_vars = {"VLLM_FL_PREFER_ENABLED": "true"}
+        if oot_bl:
+            env_vars["VLLM_FL_OOT_BLACKLIST"] = ",".join(oot_bl)
+        if flagos_bl:
+            env_vars["VLLM_FL_FLAGOS_BLACKLIST"] = ",".join(flagos_bl)
+        action["env_vars"] = env_vars
+        action["env_config_cmd"] = f"source {state.get('env_config_path', '/flagos-workspace/env_config.sh')}"
+
+    return action
 
 
 # =============================================================================
@@ -535,8 +669,11 @@ def update_result(op_name: str, throughput: Optional[float] = None,
         log_entry["throughputs"] = json.loads(throughputs) if isinstance(throughputs, str) else throughputs
 
     search_mode = state.get("search_mode", "linear")
+    search_phase = state.get("search_phase", "group")
 
-    if search_mode == "group":
+    if search_phase in ("oot", "oot_verify"):
+        _update_oot_result(state, op_name, ratio, target_ratio, log_entry)
+    elif search_mode == "group":
         _update_group_result(state, op_name, ratio, target_ratio, log_entry)
     else:
         _update_linear_result(state, op_name, ratio, target_ratio, log_entry)
@@ -560,6 +697,49 @@ def update_result(op_name: str, throughput: Optional[float] = None,
         "progress": f"step {state['current_step']}",
         "status": state["status"],
     }
+
+
+def _update_oot_result(state: Dict[str, Any], op_name: str,
+                       ratio: float, target_ratio: float,
+                       log_entry: Dict[str, Any]):
+    """处理 OOT 搜索阶段的结果更新"""
+    search_phase = state.get("search_phase", "oot")
+    oot = state.get("oot_state", {})
+
+    if search_phase == "oot_verify":
+        # 累积验证结果
+        if ratio >= target_ratio:
+            log_entry["decision"] = "oot_sufficient"
+            log_entry["reason"] = f"OOT 禁用后 ratio {ratio*100:.1f}% >= {target_ratio*100:.0f}%, 无需搜索 torch 底层"
+            state["status"] = "completed"
+            state["search_phase"] = "done"
+            state["completed_at"] = datetime.now().isoformat()
+            print(f"  [OOT 累积] 达标 {ratio*100:.1f}% - 搜索完成")
+        else:
+            log_entry["decision"] = "oot_insufficient"
+            log_entry["reason"] = f"OOT 禁用后 ratio {ratio*100:.1f}% < {target_ratio*100:.0f}%, 进入 group 搜索"
+            state["search_phase"] = "group"
+            print(f"  [OOT 累积] 未达标 {ratio*100:.1f}% - 进入 group 阶段")
+        return
+
+    # 单个 OOT 算子测试
+    # 基线：全量 FlagGems（含该 OOT 算子）的性能
+    # 测试：禁用该 OOT 算子后的性能
+    # 如果禁用后性能显著提升 → 该算子拖慢性能 → 加入 blacklist
+    baseline_ratio = state.get("current_ratio", 0)
+
+    if ratio > baseline_ratio + 0.02:  # 禁用后性能提升 > 2%
+        log_entry["decision"] = "oot_blacklisted"
+        log_entry["reason"] = f"禁用 {op_name} 后 ratio 从 {baseline_ratio*100:.1f}% 提升到 {ratio*100:.1f}%"
+        oot["blacklist"].append(op_name)
+        print(f"  [OOT {op_name}] BLACKLISTED - 性能提升 {(ratio-baseline_ratio)*100:.1f}%")
+    else:
+        log_entry["decision"] = "oot_kept"
+        log_entry["reason"] = f"禁用 {op_name} 后 ratio {ratio*100:.1f}% 无显著提升"
+        print(f"  [OOT {op_name}] KEPT - 无显著提升")
+
+    oot["tested"].append(op_name)
+    oot["current_idx"] = len(oot["tested"])
 
 
 def _update_group_result(state: Dict[str, Any], op_name: str,
@@ -814,6 +994,9 @@ def main():
     init_parser.add_argument("--target-ratio", type=float, default=0.8, help="性能目标比率")
     init_parser.add_argument("--runtime-ops", help="运行时实际调用的算子列表 JSON（可选，只搜索这些算子）")
     init_parser.add_argument("--no-group-search", action="store_true", help="禁用分组二分，使用线性搜索")
+    init_parser.add_argument("--plugin-mode", action="store_true", help="Plugin 模式（使用环境变量控制，含 OOT 搜索）")
+    init_parser.add_argument("--oot-ops", help="自定义 OOT 算子列表（逗号分隔，默认使用内置列表）")
+    init_parser.add_argument("--env-config-path", default="/flagos-workspace/env_config.sh", help="env_config.sh 路径")
     init_parser.add_argument("--state-path", help="状态文件路径")
 
     # next 子命令
@@ -849,11 +1032,15 @@ def main():
     args = parser.parse_args()
 
     if args.command == "init":
+        oot_ops_list = args.oot_ops.split(",") if args.oot_ops else None
         init_optimization(
             args.ops_file, args.native_throughput,
             args.target_ratio,
             runtime_ops_file=args.runtime_ops,
             group_search=not args.no_group_search,
+            plugin_mode=args.plugin_mode,
+            oot_ops=oot_ops_list,
+            env_config_path=args.env_config_path,
             state_path=args.state_path,
         )
 
@@ -879,12 +1066,16 @@ def main():
         status_info = {
             "status": state["status"],
             "search_mode": state.get("search_mode", "linear"),
+            "search_phase": state.get("search_phase", "group"),
+            "plugin_mode": state.get("plugin_mode", False),
             "progress": f"step {state['current_step']}",
             "total_ops": len(state["all_ops"]),
             "search_ops": len(state.get("search_ops", state["all_ops"])),
             "enabled": len(state["enabled_ops"]),
             "disabled": len(state["disabled_ops"]),
             "current_op": state.get("current_op", ""),
+            "oot_blacklist": state.get("oot_blacklist", []),
+            "flagos_blacklist": state.get("flagos_blacklist", []),
         }
         gs = state.get("group_state", {})
         if gs:

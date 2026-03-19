@@ -95,6 +95,8 @@ def probe_flaggems_capabilities():
         "gpu_compute_capability": "",
         "gpu_arch": "",
         "plugin_env_vars": {},
+        "plugin_control": {},
+        "oot_ops": [],
     }
 
     # GPU compute capability 探测
@@ -108,8 +110,12 @@ def probe_flaggems_capabilities():
         pass
 
     # Plugin dispatch 环境变量探测
-    for var in ["VLLM_FL_FLAGOS_WHITELIST", "VLLM_FL_PREFER_ENABLED",
-                "VLLM_USE_DEEP_GEMM", "VLLM_FL_DISPATCH_MODE"]:
+    for var in ["VLLM_FL_FLAGOS_WHITELIST", "VLLM_FL_FLAGOS_BLACKLIST",
+                "VLLM_FL_OOT_WHITELIST", "VLLM_FL_OOT_BLACKLIST",
+                "VLLM_FL_PREFER_ENABLED", "VLLM_FL_OOT_ENABLED",
+                "VLLM_FL_PER_OP", "VLLM_FL_DISPATCH_MODE",
+                "VLLM_FL_DISPATCH_DEBUG",
+                "VLLM_USE_DEEP_GEMM"]:
         val = os.environ.get(var)
         if val is not None:
             result["plugin_env_vars"][var] = val
@@ -178,6 +184,30 @@ def probe_flaggems_capabilities():
             result["plugin_has_dispatch"] = True
         except ImportError:
             pass
+
+        # 探测 OOT 算子列表
+        try:
+            from vllm_fl.ops import oot as oot_module
+            oot_ops = [name for name in dir(oot_module)
+                       if not name.startswith('_') and callable(getattr(oot_module, name, None))]
+            result["oot_ops"] = oot_ops
+        except (ImportError, AttributeError):
+            # 兜底：使用已知的 OOT 算子列表
+            result["oot_ops"] = [
+                "silu_and_mul", "rms_norm", "rotary_embedding",
+                "fused_moe", "attention_backend",
+            ]
+
+        # 构建 plugin_control 信息
+        result["plugin_control"] = {
+            "prefer_enabled": os.environ.get("VLLM_FL_PREFER_ENABLED", "not_set"),
+            "oot_enabled": os.environ.get("VLLM_FL_OOT_ENABLED", "not_set"),
+            "oot_ops": result["oot_ops"],
+            "flagos_whitelist": os.environ.get("VLLM_FL_FLAGOS_WHITELIST", ""),
+            "flagos_blacklist": os.environ.get("VLLM_FL_FLAGOS_BLACKLIST", ""),
+            "oot_blacklist": os.environ.get("VLLM_FL_OOT_BLACKLIST", ""),
+            "dispatch_mode": os.environ.get("VLLM_FL_DISPATCH_MODE", ""),
+        }
     except ImportError:
         pass
 
@@ -301,6 +331,32 @@ def _derive_integration_methods(integration):
     integration["disable_method"] = "unknown"
 
 
+def check_flagtree():
+    """检测 FlagTree 安装状态"""
+    result = {
+        "installed": False,
+        "version": "",
+        "triton_version": "",
+        "backend": "",
+    }
+    try:
+        import triton
+        result["triton_version"] = getattr(triton, "__version__", "unknown")
+    except ImportError:
+        return result
+
+    try:
+        import flagtree
+        result["installed"] = True
+        result["version"] = getattr(flagtree, "__version__", "unknown")
+        result["backend"] = getattr(flagtree, "backend", "")
+    except ImportError:
+        # triton 存在但非 FlagTree
+        pass
+
+    return result
+
+
 def check_env_vars():
     """列出所有 flag 相关环境变量"""
     result = {}
@@ -317,6 +373,7 @@ def collect_all():
     flag = check_flag_packages()
     capabilities = probe_flaggems_capabilities()
     integration = scan_flaggems_integration()
+    flagtree = check_flagtree()
     env_vars = check_env_vars()
 
     return {
@@ -336,8 +393,11 @@ def collect_all():
             "gpu_compute_capability": capabilities["gpu_compute_capability"],
             "gpu_arch": capabilities["gpu_arch"],
             "plugin_env_vars": capabilities["plugin_env_vars"],
+            "plugin_control": capabilities.get("plugin_control", {}),
+            "oot_ops": capabilities.get("oot_ops", []),
             "env_vars": env_vars,
         },
+        "flagtree": flagtree,
         "flaggems_control": {
             "integration_type": integration["integration_type"],
             "enable_method": integration["enable_method"],
@@ -401,6 +461,16 @@ def output_report(data):
         for k, v in insp["plugin_env_vars"].items():
             report.append(f"    {k}={v}")
 
+    if insp.get("plugin_control"):
+        pc = insp["plugin_control"]
+        report.append(f"\n  Plugin 控制信息:")
+        report.append(f"    prefer_enabled: {pc.get('prefer_enabled', 'not_set')}")
+        report.append(f"    oot_enabled:    {pc.get('oot_enabled', 'not_set')}")
+        if pc.get("oot_ops"):
+            report.append(f"    OOT 算子:       {', '.join(pc['oot_ops'])}")
+        if pc.get("dispatch_mode"):
+            report.append(f"    dispatch_mode:  {pc['dispatch_mode']}")
+
     if ctrl["code_locations"]:
         report.append("\n  代码级扫描结果:")
         for loc in ctrl["code_locations"][:10]:
@@ -412,6 +482,22 @@ def output_report(data):
             report.append(f"  {k}={v}")
     else:
         report.append("\n## 环境变量: 无 flag 相关环境变量")
+
+    # FlagTree
+    ft = data.get("flagtree", {})
+    report.append("\n## FlagTree")
+    if ft.get("installed"):
+        report.append(f"  状态:        已安装")
+        report.append(f"  版本:        {ft.get('version', 'unknown')}")
+        report.append(f"  Triton 版本: {ft.get('triton_version', 'unknown')}")
+        if ft.get("backend"):
+            report.append(f"  Backend:     {ft['backend']}")
+    else:
+        triton_ver = ft.get("triton_version", "")
+        if triton_ver:
+            report.append(f"  状态:        未安装（triton {triton_ver} 为原版）")
+        else:
+            report.append(f"  状态:        未安装（triton 也未安装）")
 
     if insp["probe_error"]:
         report.append(f"\n## 探测错误: {insp['probe_error']}")

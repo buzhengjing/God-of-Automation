@@ -3,7 +3,7 @@
 vLLM 性能基准测试工具 (重构版)
 
 基于 perf.py 重构，新增:
-- --concurrency-search: 自动搜索最优并发级别，增强早停（连续2级<3% 或 下降>5%）
+- --concurrency-search: 自动搜索最优并发级别，饱和自动停止（连续2级<3% 或 下降>5%）
 - --quick: 快速模式，num_prompts=concurrency，并发只取前3+末1，用于流程验证
 - --output-name: 指定输出文件名
 - --output-dir: 指定输出目录
@@ -264,12 +264,12 @@ def run_concurrency_search(base_cmd: List[str], levels: List[int],
     """
     自动搜索最优并发级别。
 
-    增强早停条件（early_stop=True 时生效）：
-    1. 连续 2 级增长 < 3% → 早停
-    2. 吞吐下降 > 5% → 早停
-    3. 请求失败数 > 0 → 早停
+    增强停止条件（early_stop=True 时生效）：
+    1. 连续 2 级增长 < 3% → 已饱和，停止搜索
+    2. 吞吐下降 > 5% → 过拐点，停止搜索
+    3. 请求失败数 > 0 → 过载，停止搜索
 
-    early_stop=False 时所有并发级别全跑，不检查早停。
+    early_stop=False 时所有并发级别全跑，不检查停止条件。
     """
     GROWTH_THRESHOLD = 0.03      # 3% 增长阈值
     DECLINE_THRESHOLD = 0.05     # 5% 下降阈值
@@ -279,12 +279,12 @@ def run_concurrency_search(base_cmd: List[str], levels: List[int],
     prev_throughput = 0.0
     best_throughput = 0.0
     best_concurrency = levels[0]
-    early_stopped = False
+    stopped = False
     consecutive_low_growth = 0
 
     print(f"  [CONCURRENCY SEARCH] levels={levels}, early_stop={early_stop}")
     if early_stop:
-        print(f"    early_stop: growth<{GROWTH_THRESHOLD*100}% x{CONSECUTIVE_LOW} | decline>{DECLINE_THRESHOLD*100}% | failures")
+        print(f"    stop conditions: growth<{GROWTH_THRESHOLD*100}% x{CONSECUTIVE_LOW} | decline>{DECLINE_THRESHOLD*100}% | failures")
 
     for conc in levels:
         # 最低样本量：max(concurrency, 100)
@@ -294,8 +294,8 @@ def run_concurrency_search(base_cmd: List[str], levels: List[int],
 
         if dry_run or "error" in metrics:
             if "error" in metrics and not dry_run:
-                print(f"  [EARLY STOP] Error at concurrency={conc}: {metrics['error'][:100]}")
-                early_stopped = True
+                print(f"    Error at concurrency={conc}, stopping search: {metrics['error'][:100]}")
+                stopped = True
                 break
             continue
 
@@ -309,19 +309,19 @@ def run_concurrency_search(base_cmd: List[str], levels: List[int],
             # 检查请求失败
             failed_requests = metrics.get('Failed requests', 0)
             if failed_requests and failed_requests > 0:
-                print(f"  [EARLY STOP] {failed_requests} failed requests at concurrency={conc}")
-                early_stopped = True
+                print(f"    {failed_requests} failed requests at concurrency={conc}, stopping search")
+                stopped = True
                 break
 
-            # 检查早停条件
+            # 检查停止条件
             if prev_throughput > 0 and current_throughput > 0:
                 growth = (current_throughput - prev_throughput) / prev_throughput
 
                 # 条件 2：吞吐下降超过 5%
                 if current_throughput < prev_throughput * (1 - DECLINE_THRESHOLD):
                     print(f"    Growth: {growth*100:.1f}% — throughput declined >{DECLINE_THRESHOLD*100}%")
-                    print(f"  [EARLY STOP] Throughput decline at concurrency={conc}")
-                    early_stopped = True
+                    print(f"    Best concurrency: {best_concurrency}, stopping search")
+                    stopped = True
                     break
 
                 # 条件 1：连续低增长
@@ -329,8 +329,8 @@ def run_concurrency_search(base_cmd: List[str], levels: List[int],
                     consecutive_low_growth += 1
                     print(f"    Growth: {growth*100:.1f}% — low growth {consecutive_low_growth}/{CONSECUTIVE_LOW}")
                     if consecutive_low_growth >= CONSECUTIVE_LOW:
-                        print(f"  [EARLY STOP] {CONSECUTIVE_LOW} consecutive low-growth levels at concurrency={conc}")
-                        early_stopped = True
+                        print(f"    Best concurrency: {best_concurrency}, stopping search")
+                        stopped = True
                         break
                 else:
                     consecutive_low_growth = 0
@@ -339,16 +339,16 @@ def run_concurrency_search(base_cmd: List[str], levels: List[int],
         prev_throughput = current_throughput
 
     # 使用最优并发级别运行最终大规模测试
-    if not dry_run and not early_stopped:
+    if not dry_run and not stopped:
         print(f"  Running final test: num_prompts={final_prompts}, unlimited")
         results["max"] = run_benchmark(base_cmd, final_prompts, None, dry_run, timeout)
 
     # 记录搜索元信息
     results["_search_meta"] = {
-        "early_stopped": early_stopped,
         "best_concurrency": best_concurrency,
         "best_throughput": best_throughput,
         "tested_levels": [l for l in levels if f"concurrency_{l}" in results],
+        "all_levels_tested": not stopped,
     }
 
     return results
@@ -386,10 +386,10 @@ def run_quick_test(base_cmd: List[str], levels: List[int],
             best_concurrency = conc
 
     results["_search_meta"] = {
-        "early_stopped": False,
         "best_concurrency": best_concurrency,
         "best_throughput": best_throughput,
         "tested_levels": levels,
+        "all_levels_tested": True,
         "quick_mode": True,
     }
 
@@ -476,8 +476,10 @@ def print_summary(results: Dict[str, Any], mode: str = "default"):
         # 显示搜索元信息
         meta = tc_results.get("_search_meta")
         if meta:
-            print(f"  Early stopped:     {meta.get('early_stopped', False)}")
             print(f"  Best concurrency:  {meta.get('best_concurrency', 'N/A')}")
+            tested = meta.get('tested_levels', [])
+            if not meta.get('all_levels_tested', True):
+                print(f"  Tested levels:     {tested}")
 
 
 
@@ -491,7 +493,7 @@ def main():
     parser.add_argument("--test-case", help="运行指定测试用例")
     parser.add_argument("--dry-run", action="store_true", help="仅打印命令")
     parser.add_argument("--concurrency-search", action="store_true",
-                        help="自动搜索最优并发级别（增强早停）")
+                        help="自动搜索最优并发级别（饱和自动停止）")
     parser.add_argument("--quick", action="store_true",
                         help="快速模式：num_prompts=concurrency，并发取前3+末1，用于流程验证")
     parser.add_argument("--output-name", help="输出文件名（不含扩展名）")
@@ -528,7 +530,7 @@ def main():
     if args.quick:
         print("[模式] 快速验证（num_prompts=concurrency, 并发前3+末1）")
     elif args.concurrency_search:
-        print("[模式] 自动并发搜索 + 增强早停（连续2级<3% | 下降>5% | 失败）")
+        print("[模式] 自动并发搜索（连续2级<3% | 下降>5% | 失败 → 停止搜索）")
 
     # 执行测试
     all_results = {}

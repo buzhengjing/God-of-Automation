@@ -1,6 +1,6 @@
 ---
 name: flagos-operator-replacement
-description: 算子替换与优化工具，支持被动排除（评测报错）和主动分组二分搜索优化（性能驱动），支持 plugin 两层替换架构，算子列表自动发现，全自动搜索编排
+description: 算子替换与优化工具，支持被动排除（评测报错）和主动两阶段搜索优化（OOT→group），适配 plugin 环境变量控制和非 plugin Layer 1-4 分层降级，算子列表自动发现，全自动搜索编排
 version: 5.0.0
 license: internal
 triggers:
@@ -31,11 +31,12 @@ provides:
 独立工具，可在任何阶段按需调用。支持两种模式：
 
 1. **被动排除模式**：根据评测报错信息排除问题算子（沿用 Layer 1-4 分层降级）
-2. **主动优化模式**：分组二分搜索最优算子集，使 FlagOS 性能 ≥ 目标比率
+2. **主动优化模式**：两阶段搜索（OOT → group 分组二分），使 FlagOS 性能 ≥ 目标比率
 
 **工具脚本**（已由 setup_workspace.sh 部署到容器）:
-- `operator_optimizer.py` — 算子优化器（分组二分搜索、算子列表自动发现、映射表生成）
-- `operator_search.py` — 搜索编排（完整的 next→toggle→restart→benchmark→update 自动循环）
+- `operator_optimizer.py` — 算子优化器（OOT 搜索 + 分组二分搜索、算子列表自动发现、映射表生成）
+- `operator_search.py` — 搜索编排（完整的 next→配置→重启→benchmark→update 自动循环，支持 plugin/非plugin）
+- `apply_op_config.py` — Plugin 场景：生成 env_config.sh 环境变量配置
 
 **核心设计**：FlagGems / vllm-plugin-FL 处于持续迭代中，本 skill 不硬编码任何特定 API，而是根据 `pre-service-inspection` 探测到的 `flaggems_capabilities` 自动选择最优操作方式，逐层降级保证稳定性。
 
@@ -113,59 +114,76 @@ optimization:
 
 # Plugin 场景的两层替换架构
 
-当 `vllm_plugin_installed=true` 且 `plugin_has_dispatch=true` 时，算子替换涉及**两层**：
+当 `vllm_plugin_installed=true` 且 `plugin_has_dispatch=true` 时，算子替换通过**环境变量**控制两个独立层：
 
 ```
 ┌─────────────────────────────────────────┐
-│ Layer A: flag_gems 层                    │
-│   gems.txt → 控制哪些算子被注册          │
-│   位置: flag_gems 包内部                 │
-│   修改: toggle_flaggems.py / YAML 配置   │
+│ OOT 层（5 个高层融合算子）               │
+│   silu_and_mul, rms_norm,               │
+│   rotary_embedding, fused_moe,          │
+│   attention_backend                     │
+│   控制: VLLM_FL_OOT_BLACKLIST           │
 ├─────────────────────────────────────────┤
-│ Layer B: vllm_fl dispatch 层             │
-│   whitelist / dispatch 逻辑              │
-│   位置: vllm_fl/dispatch/               │
-│   控制: VLLM_FL_FLAGOS_WHITELIST 环境变量│
-│   或修改 dispatch 源码                    │
+│ flag_gems 层（几十个 torch 底层算子）     │
+│   addmm, mm, softmax, cos, sin, ...    │
+│   控制: VLLM_FL_FLAGOS_BLACKLIST        │
 └─────────────────────────────────────────┘
 ```
 
-## 算子列表自动发现
-
-**不硬编码 gems.txt**，而是自动搜索 flag_gems 源码目录下记录算子列表的 txt 文件。`operator_optimizer.py discover` 子命令完成自动发现：
+## 环境变量控制方式
 
 ```bash
-# 自动搜索 flaggems 中的算子列表文件
-${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py discover
+# 关闭所有 FlagGems（= native 模式）
+VLLM_FL_PREFER_ENABLED=false vllm serve ...
 
-# 搜索并保存为 JSON
-${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py discover \
-  --save-ops /flagos-workspace/results/ops_list.json
+# 禁用指定的 torch 底层算子
+VLLM_FL_FLAGOS_BLACKLIST="softmax,layer_norm" vllm serve ...
+
+# 禁用指定的 OOT 高层算子
+VLLM_FL_OOT_BLACKLIST="fused_moe" vllm serve ...
+
+# 指定单个算子使用 vendor 实现
+VLLM_FL_PER_OP="rms_norm=vendor;attention_backend=vendor" vllm serve ...
 ```
 
-发现逻辑：
-1. 定位 flag_gems 安装目录（`import flag_gems; flag_gems.__file__`）
-2. 遍历所有 `.txt` 文件
-3. 通过内容特征识别算子列表（每行一个短标识符，与已知算子名有交集）
-4. 返回匹配度最高的文件及解析出的算子列表
+**重要**：环境变量设置后需重启服务才生效。重启后 FlagGems 运行时会自动重新生成算子列表 txt 文件。
 
-找到的算子列表文件就是运行时实际加载的算子清单，是算子替换的标准：
-1. 从该列表中移除问题算子
-2. 重写该文件（或等效的配置方式）
-3. 重启服务使生效
+## 算子控制方式总结
 
-## 修复 vllm_fl 代码的操作模板
+| 场景 | 控制方式 | txt 文件角色 |
+|------|----------|-------------|
+| Plugin | `VLLM_FL_*` 环境变量 | 只读（验证生效） |
+| 非 plugin (yaml_config) | YAML exclude 配置文件 | 只读（验证生效） |
+| 非 plugin (only_enable) | `flag_gems.only_enable(include=[...])` | 只读（验证生效） |
+| 非 plugin (enable_unused) | `flag_gems.enable(unused=[...])` | 只读（验证生效） |
+| 非 plugin (兜底) | 直接写 txt 文件 | 读写 |
 
-当 dispatch 层也需要修改时（通常是 whitelist 方式）：
+**关键原则**：运行时 txt 文件优先作为只读的验证手段，不是控制手段。
+
+## apply_op_config.py 使用方式
+
+Plugin 场景专用工具，生成 `env_config.sh` 环境变量配置文件：
 
 ```bash
-# 方式 1：通过环境变量控制 whitelist
-# 将需要保留的算子用逗号分隔
-export VLLM_FL_FLAGOS_WHITELIST="addmm,bmm,mm,linear,..."
+# Native 模式
+${CMD_PREFIX} python3 /flagos-workspace/scripts/apply_op_config.py --mode native
 
-# 方式 2：修改 dispatch 源码（备份 → 修改 → 验证）
-${CMD_PREFIX} cp /path/to/vllm_fl/dispatch/ops.py /path/to/vllm_fl/dispatch/ops.py.bak
-# 然后注释掉问题算子的 dispatch 注册
+# Full 模式
+${CMD_PREFIX} python3 /flagos-workspace/scripts/apply_op_config.py --mode full
+
+# 自定义 blacklist
+${CMD_PREFIX} python3 /flagos-workspace/scripts/apply_op_config.py --mode custom \
+  --oot-blacklist "fused_moe" \
+  --flagos-blacklist "softmax,layer_norm"
+
+# 从状态文件生成
+${CMD_PREFIX} python3 /flagos-workspace/scripts/apply_op_config.py \
+  --from-state /flagos-workspace/results/operator_config.json
+```
+
+生成的 `env_config.sh` 在启动服务前 source：
+```bash
+source /flagos-workspace/env_config.sh && vllm serve ...
 ```
 
 ---
@@ -341,22 +359,27 @@ print('配置已写入:', config_path)
 
 **先完整读取 → 理解结构 → 展示 diff → 确认后执行 → 验证**。
 
-## 步骤 4 — Plugin 场景：同步修改 dispatch 层
+## 步骤 4 — Plugin 场景：通过环境变量同步禁用
 
-如果 `plugin_has_dispatch=true`，在修改 flag_gems 层后还需同步 dispatch 层：
+如果 `vllm_plugin_installed=true`，使用环境变量控制而不是修改代码：
 
 ```bash
-# 检查 dispatch 层的算子注册
-${CMD_PREFIX} grep -rn "register\|dispatch" /path/to/vllm_fl/dispatch/ 2>/dev/null | head -20
+# 生成 env_config.sh 禁用指定算子
+${CMD_PREFIX} python3 /flagos-workspace/scripts/apply_op_config.py --mode custom \
+  --oot-blacklist "fused_moe" \
+  --flagos-blacklist "softmax"
 
-# 通过环境变量或源码修改同步禁用
+# 重启服务前 source 配置
+source /flagos-workspace/env_config.sh && vllm serve ...
 ```
+
+如果 `vllm_plugin_installed=false`，无需此步骤（Layer 1-4 已直接控制 flag_gems 层）。
 
 ## 步骤 5 — 报告替换详情并提醒重启
 
 ---
 
-# 模式二：主动分组二分搜索
+# 模式二：主动两阶段搜索
 
 ## 触发条件
 
@@ -364,24 +387,30 @@ ${CMD_PREFIX} grep -rn "register\|dispatch" /path/to/vllm_fl/dispatch/ 2>/dev/nu
 
 ## 搜索策略
 
-**分组二分搜索**（替代旧版逐个遍历）：
+**两阶段搜索**（由外到内、由粗到细）：
 
 ```
-算子按功能分为 5 组：
-  compute: addmm, mm, bmm, linear, matmul, ...
-  memory:  copy_, zero_, zeros, ones, full, fill_scalar_, ...
-  math:    cos, sin, pow_scalar, exp, log, sqrt, relu, gelu, silu, ...
-  index:   gather, scatter, scatter_add_0, index, embedding, ...
-  reduce:  cumsum, sort, argmax, sum, mean, softmax, layer_norm, rms_norm, ...
-  other:   未归类算子
+阶段 1: OOT 层逐个排查（≤5 轮，仅 plugin 场景）
+  for each oot_op in [silu_and_mul, rms_norm, rotary_embedding, fused_moe, attention_backend]:
+    1. 设置 VLLM_FL_OOT_BLACKLIST=oot_op（生成 env_config.sh）
+    2. 重启服务 + quick benchmark
+    3. 读取运行时 txt 文件验证算子变化
+    4. if 禁用后性能显著提升 → 加入 oot_blacklist
 
-搜索流程：
-  1. 整组禁用 → benchmark
-     ├── 仍 ≥ 80% → 整组全禁用，跳过组内搜索 ✓
-     └── < 80% → 组内二分定位关键算子
-  2. 二分搜索：禁用前半 → benchmark → 缩小范围
-  3. 预计搜索轮次：5 组 × ~3 轮 = ~15 轮（vs 旧版 38 轮）
+  累积 OOT blacklist 后 benchmark：
+    if ratio >= 80% → 搜索完成
+    else → 进入阶段 2
+
+阶段 2: torch 底层分组二分搜索（沿用现有逻辑，~15 轮）
+  Plugin 场景：通过 VLLM_FL_FLAGOS_BLACKLIST 环境变量控制
+  非 plugin 场景：通过 Layer 1-4 策略控制
+  每轮重启后读取 txt 文件验证算子变化
 ```
+
+**为什么先搜 OOT 层？**
+- OOT 算子只有 5 个，但每个都是高层融合算子，单个对性能影响巨大
+- 阶段 1 最多 5 轮即可完成
+- 如果性能问题在 OOT 层，无需搜索几十个底层算子
 
 ## 工作流程
 
@@ -391,6 +420,8 @@ ${CMD_PREFIX} grep -rn "register\|dispatch" /path/to/vllm_fl/dispatch/ 2>/dev/nu
 docker cp skills/flagos-operator-replacement/operator_optimizer.py \
   $CONTAINER:/flagos-workspace/scripts/
 docker cp skills/flagos-operator-replacement/operator_search.py \
+  $CONTAINER:/flagos-workspace/scripts/
+docker cp skills/flagos-operator-replacement/tools/apply_op_config.py \
   $CONTAINER:/flagos-workspace/scripts/
 ```
 
@@ -432,41 +463,50 @@ with open('/flagos-workspace/results/runtime_ops.json', 'w') as f:
 
 ### 步骤 O3 — 初始化优化器
 
+**Plugin 场景（含 OOT 搜索）**：
 ```bash
-# 基本模式（搜索全量算子）
+${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py init \
+  --ops-file /flagos-workspace/results/ops_list.json \
+  --native-throughput <native_perf.output_throughput> \
+  --target-ratio 0.8 \
+  --plugin-mode
+```
+
+**非 Plugin 场景（仅 group 搜索）**：
+```bash
 ${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py init \
   --ops-file /flagos-workspace/results/ops_list.json \
   --native-throughput <native_perf.output_throughput> \
   --target-ratio 0.8
-
-# 或：仅搜索运行时算子（减少搜索空间）
-${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py init \
-  --ops-file /flagos-workspace/results/ops_list.json \
-  --runtime-ops /flagos-workspace/results/runtime_ops.json \
-  --native-throughput <native_perf.output_throughput> \
-  --target-ratio 0.8
-
-# 或：使用线性搜索（兼容旧模式）
-${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py init \
-  --ops-file /flagos-workspace/results/ops_list.json \
-  --native-throughput <native_perf.output_throughput> \
-  --no-group-search
 ```
 
 ### 步骤 O4 — 运行搜索循环
 
 **推荐方式：使用 operator_search.py 全自动搜索**（减少 Claude Code 思考开销）：
 
+**Plugin 场景**：
 ```bash
 ${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_search.py run \
   --state-path /flagos-workspace/results/operator_config.json \
   --perf-config /flagos-workspace/perf/config/perf_config.yaml \
   --service-startup-cmd "bash /flagos-workspace/scripts/start_service.sh" \
+  --plugin-mode \
+  --env-config-path /flagos-workspace/env_config.sh \
+  --max-rounds 25
+```
+
+**非 Plugin 场景**：
+```bash
+${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_search.py run \
+  --state-path /flagos-workspace/results/operator_config.json \
+  --perf-config /flagos-workspace/perf/config/perf_config.yaml \
+  --service-startup-cmd "bash /flagos-workspace/scripts/start_service.sh" \
+  --capabilities "yaml_config,only_enable" \
   --gems-txt-path ${GEMS_TXT_PATH} \
   --max-rounds 20
 ```
 
-脚本自动完成：next→应用算子配置→清除Triton cache→重启服务→等待就绪→quick benchmark→更新结果→循环。
+脚本自动完成：next→应用算子配置→清除Triton cache→重启服务→验证 txt→quick benchmark→更新结果→循环。
 
 **备选方式：手动逐步搜索**（需要更细粒度控制时使用）：
 
@@ -474,9 +514,11 @@ ${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_search.py run \
 1. 获取下一步操作:
    ${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py next
 
-2. 根据返回的 test_enabled_ops，应用算子配置
+2. 根据返回的 action 和 env_vars，应用算子配置:
+   - Plugin: 调用 apply_op_config.py 生成 env_config.sh
+   - 非 plugin: 通过 Layer 1-4 策略
 
-3. 清除 Triton cache + 重启服务
+3. 清除 Triton cache + 重启服务（plugin 场景 source env_config.sh）
 
 4. 运行快速 benchmark:
    ${CMD_PREFIX} python3 /flagos-workspace/scripts/benchmark_runner.py \
@@ -509,7 +551,8 @@ Plugin 场景需同步修改 dispatch 层。
 
 ## 搜索限制
 
-- 分组二分搜索：预计 15 轮左右完成
+- Plugin 两阶段搜索：OOT ≤5 轮 + group ≤15 轮 ≈ 20 轮
+- 非 plugin 分组二分搜索：预计 15 轮左右完成
 - 线性搜索：遍历搜索范围内所有算子一轮
 - 贪心搜索 3 轮仍未达标时，询问用户是否继续
 - 每轮保存进度，支持断点续搜
@@ -524,9 +567,10 @@ operator_replacement:
     - name: "softmax"
       reason: "optimization: ratio 95% without it"
       action: "disabled"
-  replacement_mode: "yaml_config"
+  replacement_mode: "plugin_env"      # 或 yaml_config / only_enable / source_edit
   final_gems_txt: "/path/to/gems.txt"
   config_file_path: "/path/to/enable_configs.yaml"
+  env_config_path: "/flagos-workspace/env_config.sh"
   available_ops: [...]
   rollback_info: "rm /path/to/enable_configs.yaml"
 
@@ -534,18 +578,22 @@ optimization:
   target_ratio: 0.8
   current_ratio: 0.85
   search_mode: "group"
+  search_phase: "done"           # oot | group | done
+  plugin_mode: true
   enabled_ops: [<最终启用列表>]
   disabled_ops: [<最终禁用列表>]
+  oot_blacklist: ["fused_moe"]   # OOT 层禁用列表
+  flagos_blacklist: []            # torch 底层禁用列表
   operator_config_path: "/flagos-workspace/results/operator_config.json"
   search_log:
+    - op: "fused_moe"
+      decision: "oot_blacklisted"
+      throughput: 950.0
+      ratio: 0.95
     - op: "memory"
       decision: "group_disabled"
       throughput: 950.0
       ratio: 0.95
-    - op: "compute"
-      decision: "need_binary_search"
-      throughput: 700.0
-      ratio: 0.70
 ```
 
 ---

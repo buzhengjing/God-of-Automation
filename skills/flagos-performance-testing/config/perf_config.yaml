@@ -28,6 +28,7 @@ test_matrix:
     input_len: 1024
     output_len: 1024
     enabled: true
+    early_stop: false     # 不早停，所有并发全跑；跨平台对比基准用例
 
   - name: "4k_input_1k_output"
     input_len: 4096

@@ -92,6 +92,14 @@ if [ -f "${PROJECT_ROOT}/skills/flagos-operator-replacement/operator_search.py" 
     echo "  ✓ operator_search.py"
 fi
 
+# 算子配置生成（Plugin 场景）
+if [ -f "${PROJECT_ROOT}/skills/flagos-operator-replacement/tools/apply_op_config.py" ]; then
+    docker cp "${PROJECT_ROOT}/skills/flagos-operator-replacement/tools/apply_op_config.py" \
+        "${CONTAINER}:/flagos-workspace/scripts/apply_op_config.py"
+    SCRIPTS_COPIED=$((SCRIPTS_COPIED + 1))
+    echo "  ✓ apply_op_config.py"
+fi
+
 # 性能测试配置
 if [ -d "${PROJECT_ROOT}/skills/flagos-performance-testing/config" ]; then
     docker cp "${PROJECT_ROOT}/skills/flagos-performance-testing/config/." \
@@ -107,6 +115,15 @@ for eval_script in "${PROJECT_ROOT}"/skills/flagos-eval-correctness/tools/eval_*
         SCRIPTS_COPIED=$((SCRIPTS_COPIED + 1))
     fi
 done
+
+# FlagTree 安装脚本
+if [ -f "${PROJECT_ROOT}/skills/flagos-container-preparation/tools/install_flagtree.sh" ]; then
+    docker cp "${PROJECT_ROOT}/skills/flagos-container-preparation/tools/install_flagtree.sh" \
+        "${CONTAINER}:/flagos-workspace/scripts/install_flagtree.sh"
+    docker exec "${CONTAINER}" chmod +x /flagos-workspace/scripts/install_flagtree.sh
+    SCRIPTS_COPIED=$((SCRIPTS_COPIED + 1))
+    echo "  ✓ install_flagtree.sh"
+fi
 
 echo "  共复制 ${SCRIPTS_COPIED} 个脚本"
 
