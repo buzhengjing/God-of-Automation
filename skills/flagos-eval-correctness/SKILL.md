@@ -1,7 +1,7 @@
 ---
 name: flagos-eval-correctness
 description: 自动化大模型正确性评测，优先使用远端 FlagEval 平台 API，支持错误自动分析、算子替换重试和本地评测降级。集成到双场景流程中作为可选步骤。
-version: 3.1.0
+version: 4.0.0
 triggers:
   - 精度评测
   - 正确性评测
@@ -22,6 +22,11 @@ provides:
 # FlagOS 正确性评测 Skill
 
 自动化评测大模型正确性，**优先通过远端 FlagEval 平台 API 提交评测任务**。
+
+**工具脚本**（已由 setup_workspace.sh 部署到容器）:
+- `eval_monitor.py` — 评测监控（提交→轮询→结果获取一体化，减少 Claude Code 思考开销）
+- `eval_aime.py` — AIME 本地评测（降级方案）
+- `eval_erqa.py` — ERQA 本地评测（降级方案）
 
 **在双场景流程中的位置**：
 - **Scenario A**：步骤④（Native）和步骤⑦（FlagOS），每次服务启动后、性能测试前执行（询问用户）
@@ -277,6 +282,43 @@ docker exec $CONTAINER bash -c "vllm bench serve \
    - `dry_run` 必须为布尔值
 
 ### A2 — 提交评测任务
+
+**推荐方式：使用 eval_monitor.py 一体化提交+轮询**（减少 Claude Code 思考开销）：
+
+```bash
+# 1. 准备参数文件
+cat > /flagos-workspace/eval/eval_params.json << 'PARAMS'
+{
+    "eval_infos": [{
+        "eval_model": "<eval_model>",
+        "model": "<model_name>",
+        "eval_url": "<eval_url>",
+        "tokenizer": "<tokenizer>",
+        "api_key": "<api_key>",
+        "batch_size": 1,
+        "num_concurrent": 1,
+        "num_retry": 10,
+        "gen_kwargs": "<gen_kwargs>",
+        "chip": "<chip>",
+        "base_model_name": "<base_model_name>"
+    }],
+    "domain": "<NLP|MM>",
+    "mode": "<mode>",
+    "region": "<region>",
+    "user_id": 0,
+    "dry_run": false
+}
+PARAMS
+
+# 2. 提交并自动轮询到完成
+${CMD_PREFIX} python3 /flagos-workspace/scripts/eval_monitor.py submit \
+  --params /flagos-workspace/eval/eval_params.json \
+  --output /flagos-workspace/results/eval_result.json
+```
+
+eval_monitor.py 自动完成：提交→递增间隔轮询（60s×5 + 180s×15）→获取结果→输出 JSON。
+
+**备选方式：手动 curl 提交**（需要更细粒度控制时）：
 
 ```bash
 # NLP 评测

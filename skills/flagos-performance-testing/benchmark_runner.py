@@ -172,21 +172,48 @@ def run_benchmark(cmd: List[str], num_prompts: int, max_concurrency: Optional[in
     print(f"  Running: num_prompts={num_prompts}, {conc_str}, timeout={timeout}s")
 
     try:
-        result = subprocess.run(full_cmd, capture_output=True, text=True, timeout=timeout)
-        if result.returncode != 0:
-            print(f"    FAILED: {result.stderr[:200]}")
-            return {"error": result.stderr}
+        proc = subprocess.Popen(
+            full_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        stdout_lines = []
+        import threading, time
 
-        metrics = parse_output(result.stdout)
+        # 后台线程读取 stderr 防止死锁
+        stderr_lines = []
+        def read_stderr():
+            for line in proc.stderr:
+                stderr_lines.append(line)
+        t = threading.Thread(target=read_stderr, daemon=True)
+        t.start()
+
+        # 实时逐行读取 stdout
+        start_time = time.time()
+        for line in proc.stdout:
+            stdout_lines.append(line)
+            stripped = line.strip()
+            if stripped:
+                print(f"    | {stripped}")
+            if time.time() - start_time > timeout:
+                proc.kill()
+                print(f"    TIMEOUT (>{timeout}s)")
+                return {"error": f"timeout after {timeout}s"}
+
+        proc.wait()
+        t.join(timeout=5)
+        full_stdout = "".join(stdout_lines)
+        full_stderr = "".join(stderr_lines)
+
+        if proc.returncode != 0:
+            print(f"    FAILED (rc={proc.returncode}): {full_stderr[:200]}")
+            return {"error": full_stderr}
+
+        metrics = parse_output(full_stdout)
         throughput = metrics.get('Output token throughput (tok/s)', 'N/A')
         total_tp = metrics.get('Total Token throughput (tok/s)', 'N/A')
         failed = metrics.get('Failed requests', 0)
         print(f"    OK - output={throughput} tok/s, total={total_tp} tok/s, failed={failed}")
         return metrics
 
-    except subprocess.TimeoutExpired:
-        print(f"    TIMEOUT (>{timeout}s)")
-        return {"error": f"timeout after {timeout}s"}
     except Exception as e:
         print(f"    ERROR: {e}")
         return {"error": str(e)}
@@ -195,13 +222,6 @@ def run_benchmark(cmd: List[str], num_prompts: int, max_concurrency: Optional[in
 def get_test_case_timeout(test_case: Dict[str, Any]) -> int:
     """获取测试用例的超时时间，支持从配置中读取"""
     return test_case.get("timeout", DEFAULT_TIMEOUT)
-
-
-def trim_levels_for_quick(levels: List[int]) -> List[int]:
-    """快速模式：取前 3 个 + 最后 1 个并发级别"""
-    if len(levels) <= 4:
-        return levels
-    return levels[:3] + [levels[-1]]
 
 
 def run_test_case(config: Dict[str, Any], test_case: Dict[str, Any],
@@ -214,14 +234,16 @@ def run_test_case(config: Dict[str, Any], test_case: Dict[str, Any],
 
     levels = config["concurrency"]["levels"]
     final_prompts = config["concurrency"]["final_num_prompts"]
+    use_early_stop = test_case.get("early_stop", True)
 
     if quick:
-        levels = trim_levels_for_quick(levels)
+        # quick 模式：num_prompts=concurrency，全并发，不早停
         return run_quick_test(base_cmd, levels, dry_run, timeout)
 
     if concurrency_search:
-        # 自动搜索模式：增强早停
-        return run_concurrency_search(base_cmd, levels, final_prompts, dry_run, timeout)
+        # 自动搜索模式：按 early_stop 配置决定是否早停
+        return run_concurrency_search(base_cmd, levels, final_prompts, dry_run, timeout,
+                                      early_stop=use_early_stop)
 
     # 标准模式：逐级并发测试，使用最低样本量
     for conc in levels:
@@ -237,14 +259,17 @@ def run_test_case(config: Dict[str, Any], test_case: Dict[str, Any],
 
 def run_concurrency_search(base_cmd: List[str], levels: List[int],
                            final_prompts: int, dry_run: bool = False,
-                           timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
+                           timeout: int = DEFAULT_TIMEOUT,
+                           early_stop: bool = True) -> Dict[str, Any]:
     """
     自动搜索最优并发级别。
 
-    增强早停条件：
+    增强早停条件（early_stop=True 时生效）：
     1. 连续 2 级增长 < 3% → 早停
     2. 吞吐下降 > 5% → 早停
     3. 请求失败数 > 0 → 早停
+
+    early_stop=False 时所有并发级别全跑，不检查早停。
     """
     GROWTH_THRESHOLD = 0.03      # 3% 增长阈值
     DECLINE_THRESHOLD = 0.05     # 5% 下降阈值
@@ -257,8 +282,9 @@ def run_concurrency_search(base_cmd: List[str], levels: List[int],
     early_stopped = False
     consecutive_low_growth = 0
 
-    print(f"  [CONCURRENCY SEARCH] levels={levels}")
-    print(f"    early_stop: growth<{GROWTH_THRESHOLD*100}% x{CONSECUTIVE_LOW} | decline>{DECLINE_THRESHOLD*100}% | failures")
+    print(f"  [CONCURRENCY SEARCH] levels={levels}, early_stop={early_stop}")
+    if early_stop:
+        print(f"    early_stop: growth<{GROWTH_THRESHOLD*100}% x{CONSECUTIVE_LOW} | decline>{DECLINE_THRESHOLD*100}% | failures")
 
     for conc in levels:
         # 最低样本量：max(concurrency, 100)
@@ -273,41 +299,42 @@ def run_concurrency_search(base_cmd: List[str], levels: List[int],
                 break
             continue
 
-        # 检查请求失败
-        failed_requests = metrics.get('Failed requests', 0)
-        if failed_requests and failed_requests > 0:
-            print(f"  [EARLY STOP] {failed_requests} failed requests at concurrency={conc}")
-            early_stopped = True
-            break
-
         current_throughput = metrics.get('Output token throughput (tok/s)', 0) or 0
 
         if current_throughput > best_throughput:
             best_throughput = current_throughput
             best_concurrency = conc
 
-        # 检查早停条件
-        if prev_throughput > 0 and current_throughput > 0:
-            growth = (current_throughput - prev_throughput) / prev_throughput
-
-            # 条件 2：吞吐下降超过 5%
-            if current_throughput < prev_throughput * (1 - DECLINE_THRESHOLD):
-                print(f"    Growth: {growth*100:.1f}% — throughput declined >{DECLINE_THRESHOLD*100}%")
-                print(f"  [EARLY STOP] Throughput decline at concurrency={conc}")
+        if early_stop:
+            # 检查请求失败
+            failed_requests = metrics.get('Failed requests', 0)
+            if failed_requests and failed_requests > 0:
+                print(f"  [EARLY STOP] {failed_requests} failed requests at concurrency={conc}")
                 early_stopped = True
                 break
 
-            # 条件 1：连续低增长
-            if growth < GROWTH_THRESHOLD:
-                consecutive_low_growth += 1
-                print(f"    Growth: {growth*100:.1f}% — low growth {consecutive_low_growth}/{CONSECUTIVE_LOW}")
-                if consecutive_low_growth >= CONSECUTIVE_LOW:
-                    print(f"  [EARLY STOP] {CONSECUTIVE_LOW} consecutive low-growth levels at concurrency={conc}")
+            # 检查早停条件
+            if prev_throughput > 0 and current_throughput > 0:
+                growth = (current_throughput - prev_throughput) / prev_throughput
+
+                # 条件 2：吞吐下降超过 5%
+                if current_throughput < prev_throughput * (1 - DECLINE_THRESHOLD):
+                    print(f"    Growth: {growth*100:.1f}% — throughput declined >{DECLINE_THRESHOLD*100}%")
+                    print(f"  [EARLY STOP] Throughput decline at concurrency={conc}")
                     early_stopped = True
                     break
-            else:
-                consecutive_low_growth = 0
-                print(f"    Growth: {growth*100:.1f}%")
+
+                # 条件 1：连续低增长
+                if growth < GROWTH_THRESHOLD:
+                    consecutive_low_growth += 1
+                    print(f"    Growth: {growth*100:.1f}% — low growth {consecutive_low_growth}/{CONSECUTIVE_LOW}")
+                    if consecutive_low_growth >= CONSECUTIVE_LOW:
+                        print(f"  [EARLY STOP] {CONSECUTIVE_LOW} consecutive low-growth levels at concurrency={conc}")
+                        early_stopped = True
+                        break
+                else:
+                    consecutive_low_growth = 0
+                    print(f"    Growth: {growth*100:.1f}%")
 
         prev_throughput = current_throughput
 
@@ -327,20 +354,24 @@ def run_concurrency_search(base_cmd: List[str], levels: List[int],
     return results
 
 
+QUICK_MAX_CONCURRENCY = 256
+
+
 def run_quick_test(base_cmd: List[str], levels: List[int],
                    dry_run: bool = False,
                    timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
     """
-    快速模式：num_prompts = concurrency，不跑 final unlimited 测试。
+    快速模式：num_prompts = concurrency，并发最高到 256，不早停。
 
     用于流程验证和快速三版对比，不追求精确结果。
-    并发级别已由 trim_levels_for_quick() 精简为前 3 + 末 1。
     """
+    # 并发上限 256
+    levels = [l for l in levels if l <= QUICK_MAX_CONCURRENCY]
     results = {}
     best_throughput = 0.0
     best_concurrency = levels[0]
 
-    print(f"  [QUICK MODE] levels={levels}, num_prompts=concurrency")
+    print(f"  [QUICK MODE] levels={levels}, num_prompts=concurrency, max_conc={QUICK_MAX_CONCURRENCY}")
 
     for conc in levels:
         metrics = run_benchmark(base_cmd, conc, conc, dry_run, timeout)
@@ -484,6 +515,12 @@ def main():
         if not test_matrix:
             print(f"ERROR: 测试用例 '{args.test_case}' 不存在")
             sys.exit(1)
+    elif args.quick:
+        # quick 模式：只跑 early_stop=false 的用例
+        test_matrix = [tc for tc in test_matrix if tc.get("enabled", True) and not tc.get("early_stop", True)]
+        if not test_matrix:
+            print("WARN: 没有 early_stop=false 的用例，使用第一个已启用的用例")
+            test_matrix = [tc for tc in config["test_matrix"] if tc.get("enabled", True)][:1]
     else:
         test_matrix = [tc for tc in test_matrix if tc.get("enabled", True)]
 

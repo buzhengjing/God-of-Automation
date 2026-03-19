@@ -108,6 +108,88 @@ ATEN_TO_RUNTIME_MAP = {v: k for k, v in RUNTIME_TO_ATEN_MAP.items()}
 
 
 # =============================================================================
+# 算子列表自动发现
+# =============================================================================
+
+def find_ops_list_file(gems_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    自动搜索 flaggems 源码中记录算子启动列表的 txt 文件。
+
+    不硬编码 gems.txt，而是在 flag_gems 安装目录下搜索所有 .txt 文件，
+    通过内容特征（每行一个算子名）识别算子列表文件。
+
+    Returns:
+        {
+            "found": bool,
+            "path": str,         # 找到的文件路径
+            "ops": list,         # 解析出的算子列表
+            "count": int,
+            "search_paths": list # 搜索过的路径
+        }
+    """
+    result = {
+        "found": False,
+        "path": "",
+        "ops": [],
+        "count": 0,
+        "search_paths": [],
+    }
+
+    # 确定搜索起点
+    search_root = gems_path
+    if not search_root:
+        try:
+            import flag_gems
+            search_root = os.path.dirname(flag_gems.__file__)
+        except ImportError:
+            result["error"] = "flag_gems not installed"
+            return result
+
+    if not os.path.isdir(search_root):
+        result["error"] = f"path not found: {search_root}"
+        return result
+
+    # 搜索所有 .txt 文件
+    candidates = []
+    for root, dirs, files in os.walk(search_root):
+        for fname in files:
+            if not fname.endswith('.txt'):
+                continue
+            fpath = os.path.join(root, fname)
+            result["search_paths"].append(fpath)
+            try:
+                with open(fpath, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                if not content:
+                    continue
+                lines = [l.strip() for l in content.split('\n') if l.strip() and not l.strip().startswith('#')]
+                # 特征判断：每行是一个短标识符（算子名通常 < 40 字符，无空格）
+                if len(lines) >= 5 and all(len(l) < 40 and ' ' not in l for l in lines):
+                    # 进一步验证：至少有一些已知的算子名
+                    known_ops = {"addmm", "mm", "bmm", "softmax", "cos", "sin", "exp",
+                                 "relu", "gelu", "silu", "mul", "add", "sub", "div",
+                                 "layer_norm", "rms_norm", "embedding", "zeros", "ones"}
+                    overlap = set(lines) & known_ops
+                    score = len(overlap)
+                    candidates.append((score, len(lines), fpath, lines))
+            except Exception:
+                continue
+
+    if candidates:
+        # 选择匹配已知算子数最多的文件
+        candidates.sort(key=lambda x: (-x[0], -x[1]))
+        best = candidates[0]
+        result["found"] = True
+        result["path"] = best[2]
+        result["ops"] = best[3]
+        result["count"] = len(best[3])
+        if len(candidates) > 1:
+            result["other_candidates"] = [c[2] for c in candidates[1:]]
+
+    return result
+
+
+# =============================================================================
 # 状态管理
 # =============================================================================
 
@@ -759,6 +841,11 @@ def main():
     mapping_parser.add_argument("--gems-path", help="flag_gems 源码路径（可选，自动探测）")
     mapping_parser.add_argument("--output", help="输出 JSON 文件路径")
 
+    # discover 子命令
+    discover_parser = subparsers.add_parser("discover", help="自动搜索算子列表文件")
+    discover_parser.add_argument("--gems-path", help="flag_gems 源码路径（可选，自动探测）")
+    discover_parser.add_argument("--save-ops", help="将发现的算子列表保存为 JSON 文件")
+
     args = parser.parse_args()
 
     if args.command == "init":
@@ -815,6 +902,16 @@ def main():
             with open(args.output, 'w', encoding='utf-8') as f:
                 f.write(output)
             print(f"\n映射表已保存: {args.output}")
+
+    elif args.command == "discover":
+        result = find_ops_list_file(getattr(args, 'gems_path', None))
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        if result["found"] and args.save_ops:
+            save_path = Path(args.save_ops)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(save_path, 'w', encoding='utf-8') as f:
+                json.dump(sorted(result["ops"]), f, indent=2, ensure_ascii=False)
+            print(f"\n算子列表已保存: {save_path} ({result['count']} 个算子)")
 
     else:
         parser.print_help()

@@ -1,7 +1,7 @@
 ---
 name: flagos-operator-replacement
-description: 算子替换与优化工具，支持被动排除（评测报错）和主动分组二分搜索优化（性能驱动），支持 plugin 两层替换架构，以 gems.txt 为唯一标准
-version: 4.0.0
+description: 算子替换与优化工具，支持被动排除（评测报错）和主动分组二分搜索优化（性能驱动），支持 plugin 两层替换架构，算子列表自动发现，全自动搜索编排
+version: 5.0.0
 license: internal
 triggers:
   - operator replacement
@@ -32,6 +32,10 @@ provides:
 
 1. **被动排除模式**：根据评测报错信息排除问题算子（沿用 Layer 1-4 分层降级）
 2. **主动优化模式**：分组二分搜索最优算子集，使 FlagOS 性能 ≥ 目标比率
+
+**工具脚本**（已由 setup_workspace.sh 部署到容器）:
+- `operator_optimizer.py` — 算子优化器（分组二分搜索、算子列表自动发现、映射表生成）
+- `operator_search.py` — 搜索编排（完整的 next→toggle→restart→benchmark→update 自动循环）
 
 **核心设计**：FlagGems / vllm-plugin-FL 处于持续迭代中，本 skill 不硬编码任何特定 API，而是根据 `pre-service-inspection` 探测到的 `flaggems_capabilities` 自动选择最优操作方式，逐层降级保证稳定性。
 
@@ -126,26 +130,29 @@ optimization:
 └─────────────────────────────────────────┘
 ```
 
-## 以 gems.txt 为唯一标准
+## 算子列表自动发现
 
-**gems.txt** 是 FlagGems 运行时实际加载的算子清单，是算子替换的唯一标准：
-
-1. 读取 gems.txt 获取当前注册的算子列表
-2. 从该列表中移除问题算子
-3. 重写 gems.txt（或等效的配置方式）
-4. 重启服务使生效
+**不硬编码 gems.txt**，而是自动搜索 flag_gems 源码目录下记录算子列表的 txt 文件。`operator_optimizer.py discover` 子命令完成自动发现：
 
 ```bash
-# 读取 gems.txt
-${CMD_PREFIX} cat ${GEMS_TXT_PATH}
+# 自动搜索 flaggems 中的算子列表文件
+${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py discover
 
-# gems.txt 格式示例:
-# addmm
-# bmm
-# cos
-# cumsum
-# ...
+# 搜索并保存为 JSON
+${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py discover \
+  --save-ops /flagos-workspace/results/ops_list.json
 ```
+
+发现逻辑：
+1. 定位 flag_gems 安装目录（`import flag_gems; flag_gems.__file__`）
+2. 遍历所有 `.txt` 文件
+3. 通过内容特征识别算子列表（每行一个短标识符，与已知算子名有交集）
+4. 返回匹配度最高的文件及解析出的算子列表
+
+找到的算子列表文件就是运行时实际加载的算子清单，是算子替换的标准：
+1. 从该列表中移除问题算子
+2. 重写该文件（或等效的配置方式）
+3. 重启服务使生效
 
 ## 修复 vllm_fl 代码的操作模板
 
@@ -383,9 +390,19 @@ ${CMD_PREFIX} grep -rn "register\|dispatch" /path/to/vllm_fl/dispatch/ 2>/dev/nu
 ```bash
 docker cp skills/flagos-operator-replacement/operator_optimizer.py \
   $CONTAINER:/flagos-workspace/scripts/
+docker cp skills/flagos-operator-replacement/operator_search.py \
+  $CONTAINER:/flagos-workspace/scripts/
 ```
 
-### 步骤 O2 — 导出当前算子列表
+### 步骤 O2 — 自动发现并导出算子列表
+
+```bash
+# 自动发现算子列表文件并保存
+${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py discover \
+  --save-ops /flagos-workspace/results/ops_list.json
+```
+
+如果自动发现失败，回退到 API 枚举：
 
 ```bash
 ${CMD_PREFIX} python3 -c "
@@ -436,46 +453,39 @@ ${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py init \
   --no-group-search
 ```
 
-### 步骤 O4 — 迭代搜索循环
+### 步骤 O4 — 运行搜索循环
 
-**每轮操作**：
+**推荐方式：使用 operator_search.py 全自动搜索**（减少 Claude Code 思考开销）：
+
+```bash
+${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_search.py run \
+  --state-path /flagos-workspace/results/operator_config.json \
+  --perf-config /flagos-workspace/perf/config/perf_config.yaml \
+  --service-startup-cmd "bash /flagos-workspace/scripts/start_service.sh" \
+  --gems-txt-path ${GEMS_TXT_PATH} \
+  --max-rounds 20
+```
+
+脚本自动完成：next→应用算子配置→清除Triton cache→重启服务→等待就绪→quick benchmark→更新结果→循环。
+
+**备选方式：手动逐步搜索**（需要更细粒度控制时使用）：
 
 ```
 1. 获取下一步操作:
    ${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py next
 
-   返回值示例（分组搜索）:
-   {
-     "action": "test_disable_group",
-     "group": "memory",
-     "group_ops": ["copy_", "zero_", "zeros", ...],
-     "test_enabled_ops": [...],
-     "test_disabled_ops": [...]
-   }
+2. 根据返回的 test_enabled_ops，应用算子配置
 
-2. 根据返回的 test_enabled_ops，应用算子配置:
-   - 使用 Layer 1-4 降级策略应用配置
-
-3. 重启服务（flagos 模式）
+3. 清除 Triton cache + 重启服务
 
 4. 运行快速 benchmark:
    ${CMD_PREFIX} python3 /flagos-workspace/scripts/benchmark_runner.py \
      --config /flagos-workspace/perf/config/perf_config.yaml \
-     --test-case 1k_input_1k_output \
-     --output-name optimize_step_N \
-     --output-dir /flagos-workspace/results/
+     --quick --output-name optimize_step_N --output-dir /flagos-workspace/results/
 
-5. 更新优化器（支持多并发吞吐量）:
-   # 单一吞吐量
+5. 更新优化器:
    ${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py update \
-     --op-name <当前测试的组名或算子名> \
-     --throughput <测试吞吐量> \
-     --native-throughput <native_perf.output_throughput>
-
-   # 或：多并发吞吐量（用最小值判定）
-   ${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py update \
-     --op-name <名称> \
-     --throughputs '{"1":800,"64":900,"256":850}' \
+     --op-name <名称> --throughputs '{"1":800,"64":900,"256":850}' \
      --native-throughput <native_perf.output_throughput>
 
 6. 检查状态，继续或结束

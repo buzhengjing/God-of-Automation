@@ -92,6 +92,14 @@ if [ -f "${PROJECT_ROOT}/skills/flagos-operator-replacement/operator_optimizer.p
     echo "  ✓ operator_optimizer.py"
 fi
 
+# 算子搜索编排
+if [ -f "${PROJECT_ROOT}/skills/flagos-operator-replacement/operator_search.py" ]; then
+    docker cp "${PROJECT_ROOT}/skills/flagos-operator-replacement/operator_search.py" \
+        "${CONTAINER}:/flagos-workspace/scripts/operator_search.py"
+    SCRIPTS_COPIED=$((SCRIPTS_COPIED + 1))
+    echo "  ✓ operator_search.py"
+fi
+
 # 性能测试配置
 if [ -d "${PROJECT_ROOT}/skills/flagos-performance-testing/config" ]; then
     docker cp "${PROJECT_ROOT}/skills/flagos-performance-testing/config/." \
