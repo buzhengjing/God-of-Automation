@@ -120,7 +120,7 @@ docker exec $CONTAINER python3 /flagos-workspace/scripts/inspect_env.py --report
 |------|----------|
 | torch 未安装 | 镜像可能有问题，建议更换镜像或手动安装 |
 | vllm/sglang 都未安装 | 确认镜像是否为推理镜像 |
-| FlagGems 未安装 | 可通过 `flagos-flag-upgrade` 安装 |
+| FlagGems 未安装 | 确认镜像是否包含 FlagGems，或手动安装 |
 | inspect_env.py 不存在 | 运行 `setup_workspace.sh` 重新部署 |
 | capabilities 为空列表 | FlagGems 版本过旧，算子替换降级到源码修改模式 |
 | integration_type 为 unknown | 标记为 unknown，后续步骤需人工介入 |

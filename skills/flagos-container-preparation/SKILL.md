@@ -133,7 +133,7 @@ bash skills/flagos-container-preparation/tools/setup_workspace.sh $CONTAINER
 
 此脚本一次性完成：
 1. 创建 `/flagos-workspace` 全部子目录
-2. 复制所有工具脚本到容器（inspect_env.py, toggle_flaggems.py, upgrade_component.py, wait_for_service.sh, benchmark_runner.py, performance_compare.py, operator_optimizer.py）
+2. 复制所有工具脚本到容器（inspect_env.py, toggle_flaggems.py, wait_for_service.sh, benchmark_runner.py, performance_compare.py, operator_optimizer.py, operator_search.py, eval_monitor.py）
 3. 安装脚本依赖（pyyaml 等）
 4. 验证所有脚本可执行
 

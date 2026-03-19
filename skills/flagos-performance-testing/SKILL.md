@@ -268,50 +268,6 @@ docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/benchmark
 
 ---
 
-## Scenario B 专用
-
-### 升级前测试
-
-```bash
-docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/benchmark_runner.py \
-  --config perf/config/perf_config.yaml \
-  --concurrency-search \
-  --output-name flagos_before_upgrade \
-  --output-dir /flagos-workspace/results/ \
-  --mode flagos_before_upgrade"
-```
-
-### 升级后测试
-
-```bash
-docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/benchmark_runner.py \
-  --config perf/config/perf_config.yaml \
-  --concurrency-search \
-  --output-name flagos_after_upgrade \
-  --output-dir /flagos-workspace/results/ \
-  --mode flagos_after_upgrade"
-```
-
-### 升级前后对比（标准 markdown 格式）
-
-```bash
-docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/performance_compare.py \
-  --native results/native_performance.json \
-  --flagos-before results/flagos_before_upgrade.json \
-  --flagos-after results/flagos_after_upgrade.json \
-  --output results/performance_compare.csv \
-  --format markdown"
-```
-
-输出格式：
-```
-| Test Case | Native TPS | FlagOS Before TPS | Ratio      | FlagOS After TPS | Ratio      | Best Concurrency |
-| --------- | ---------- | ----------------- | ---------- | ---------------- | ---------- | ---------------- |
-| 1k→1k     | 17328      | 17511             | **101.1%** | 17325            | **100.0%** | 256              |
-```
-
----
-
 ## benchmark_runner.py 参数
 
 | 参数 | 说明 |
@@ -346,8 +302,6 @@ docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/performan
 | `--native` | 原生性能 JSON（必填） |
 | `--flagos-initial` | FlagOS 初始性能 |
 | `--flagos-optimized` | FlagOS 优化后性能 |
-| `--flagos-before` | 升级前性能（Scenario B） |
-| `--flagos-after` | 升级后性能（Scenario B） |
 | `--output` | CSV 输出路径 |
 | `--target-ratio` | 目标比率（默认 0.8） |
 | `--format` | 输出格式: `text`（默认） / `markdown` |

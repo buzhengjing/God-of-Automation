@@ -11,9 +11,6 @@ Usage:
     python performance_compare.py --native results/native_performance.json \
                                    --flagos-initial results/flagos_initial.json \
                                    --flagos-optimized results/flagos_optimized.json
-    python performance_compare.py --native results/native_performance.json \
-                                   --flagos-before results/flagos_before_upgrade.json \
-                                   --flagos-after results/flagos_after_upgrade.json
 """
 
 import argparse
@@ -212,8 +209,6 @@ def print_markdown_table(rows: List[Dict[str, Any]], benchmark_names: List[str])
         "native": "Native TPS",
         "flagos_initial": "FlagOS Initial TPS",
         "flagos_optimized": "FlagOS Optimized TPS",
-        "flagos_before_upgrade": "FlagOS Before TPS",
-        "flagos_after_upgrade": "FlagOS After TPS",
     }
 
     # 构建表头
@@ -385,8 +380,6 @@ def main():
     parser.add_argument("--native", required=True, help="原生性能结果 JSON 路径")
     parser.add_argument("--flagos-initial", help="FlagOS 初始性能结果 JSON 路径")
     parser.add_argument("--flagos-optimized", help="FlagOS 优化后性能结果 JSON 路径")
-    parser.add_argument("--flagos-before", help="FlagOS 升级前性能结果 JSON 路径 (Scenario B)")
-    parser.add_argument("--flagos-after", help="FlagOS 升级后性能结果 JSON 路径 (Scenario B)")
     parser.add_argument("--output", default="./performance_compare.csv", help="CSV 输出路径")
     parser.add_argument("--target-ratio", type=float, default=0.8, help="性能目标比率 (默认 0.8)")
     parser.add_argument("--format", choices=["text", "markdown"], default="text",
@@ -407,14 +400,6 @@ def main():
     if args.flagos_optimized:
         benchmarks["flagos_optimized"] = load_benchmark(args.flagos_optimized)
         benchmark_names.append("flagos_optimized")
-
-    if args.flagos_before:
-        benchmarks["flagos_before_upgrade"] = load_benchmark(args.flagos_before)
-        benchmark_names.append("flagos_before_upgrade")
-
-    if args.flagos_after:
-        benchmarks["flagos_after_upgrade"] = load_benchmark(args.flagos_after)
-        benchmark_names.append("flagos_after_upgrade")
 
     if len(benchmarks) < 2:
         print("ERROR: 至少需要 native + 一个 flagos 结果文件")

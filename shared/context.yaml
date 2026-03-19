@@ -18,7 +18,7 @@ execution:
 # ============================================================================
 # 场景 (由 start_deployment.sh 入口确定)
 # ============================================================================
-scenario: ""                  # A (新模型迁移发布) | B (旧模型升级 FlagGems)
+scenario: ""                  # 新模型迁移发布
 
 # ============================================================================
 # 环境入口 (由 container-preparation 写入)
@@ -180,8 +180,6 @@ native_perf:
 flagos_perf:
   initial_path: ""            # flagos_initial.json 路径
   optimized_path: ""          # flagos_optimized.json 路径
-  before_upgrade_path: ""     # Scenario B: 升级前性能
-  after_upgrade_path: ""      # Scenario B: 升级后性能
 
 # ============================================================================
 # 算子优化 (由 operator-replacement 写入)
@@ -193,13 +191,6 @@ optimization:
   disabled_ops: []            # 当前禁用的算子列表
   operator_config_path: ""    # operator_config.json 路径
   search_log: []              # 搜索历史记录
-
-# ============================================================================
-# 组件升级信息 (由 flag-upgrade 写入)
-# ============================================================================
-flag_upgrade:
-  upgraded_packages: []     # 升级的包列表
-  timestamp: ""             # 升级时间
 
 # ============================================================================
 # 元数据

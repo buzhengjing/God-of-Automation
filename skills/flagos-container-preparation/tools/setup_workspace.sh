@@ -60,14 +60,6 @@ if [ -f "${PROJECT_ROOT}/skills/flagos-service-startup/tools/wait_for_service.sh
     echo "  ✓ wait_for_service.sh"
 fi
 
-# 组件升级
-if [ -f "${PROJECT_ROOT}/skills/flagos-flag-upgrade/tools/upgrade_component.py" ]; then
-    docker cp "${PROJECT_ROOT}/skills/flagos-flag-upgrade/tools/upgrade_component.py" \
-        "${CONTAINER}:/flagos-workspace/scripts/upgrade_component.py"
-    SCRIPTS_COPIED=$((SCRIPTS_COPIED + 1))
-    echo "  ✓ upgrade_component.py"
-fi
-
 # 性能测试
 if [ -f "${PROJECT_ROOT}/skills/flagos-performance-testing/benchmark_runner.py" ]; then
     docker cp "${PROJECT_ROOT}/skills/flagos-performance-testing/benchmark_runner.py" \

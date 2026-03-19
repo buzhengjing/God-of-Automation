@@ -27,25 +27,12 @@
 | 启动服务 / start service / 健康检查 | flagos-service-startup | `skills/flagos-service-startup/SKILL.md` |
 | 性能测试 / benchmark / vllm bench | flagos-performance-testing | `skills/flagos-performance-testing/SKILL.md` |
 | 算子替换 / operator replacement / 算子优化 | flagos-operator-replacement | `skills/flagos-operator-replacement/SKILL.md` |
-| 组件升级 / flag upgrade / upgrade flaggems | flagos-flag-upgrade | `skills/flagos-flag-upgrade/SKILL.md` |
 | 精度评测 / eval correctness / accuracy test | flagos-eval-correctness | `skills/flagos-eval-correctness/SKILL.md` |
 | 日志分析 / analyze logs | flagos-log-analyzer | `skills/flagos-log-analyzer/SKILL.md` |
 
 ---
 
-## 场景识别规则
-
-收到用户指令后，**先判断场景再执行**：
-
-| 用户指令特征 | 场景 |
-|-------------|------|
-| 包含 "升级" / "upgrade" / ModelScope URL / HuggingFace URL | **Scenario B**（旧模型升级） |
-| 包含 "迁移" / "发布" / "新模型" / 容器名 / 镜像地址 | **Scenario A**（新模型迁移发布） |
-| 不确定 | 默认 **Scenario A** |
-
----
-
-## Scenario A 工作流（新模型迁移发布）
+## 工作流（新模型迁移发布）
 
 **强制按以下顺序执行，不可跳步或调换：**
 
@@ -73,35 +60,6 @@
 ⑪ 生成最终报告
 ```
 
-## Scenario B 工作流（旧模型升级 FlagGems）
-
-**强制按以下顺序执行 — 先测后升级：**
-
-**环境感知原则**：同 Scenario A，步骤②后判断 FlagGems 状态决定测试顺序。
-**算子列表必录**：每次 FlagGems 启用时（升级前、升级后）都必须记录算子列表。
-
-```
-① container-preparation     → 容器准备（含本地权重检查 + 解析 README / 接入容器）
-② pre-service-inspection    → 环境检测
-   ┌── 判断 FlagGems 是否已启用 ──┐
-   │                               │
-   ▼ [已启用 → 先测 FlagOS]        ▼ [未启用 → 先测 Native]
-③  记录算子列表（强制）/            ③ Native 性能基线
-   FlagOS 升级前性能基线             → 然后启用 FlagGems
-④  关闭 FlagGems                   ④ 记录算子列表（强制）
-   Native 性能基线                    FlagOS 升级前性能基线
-   └──────── 汇合 ─────────────────┘
-⑤ 升级前结果: native_performance.json + flagos_before_upgrade.json
-⑥ flag-upgrade              → FlagGems 组件升级（默认 main 分支）
-⑦ service-startup (flagos)  → 升级后 FlagOS 模式启动
-⑧ 记录升级后算子列表（强制） → 对比升级前后算子变化
-⑨ eval-correctness (flagos) → 询问用户是否执行精度评测
-⑩ performance-testing       → 升级后性能 → flagos_after_upgrade.json
-⑪ 三方性能对比              → native vs before vs after
-   └── 升级后 < 80% → operator-replacement（基于升级后算子列表）
-⑫ 生成最终报告
-```
-
 ---
 
 ## 自动决策规则（零交互默认值）
@@ -110,10 +68,7 @@
 
 | 决策项 | 默认值 | 说明 |
 |--------|--------|------|
-| Scenario B 升级分支 | `main` | 不询问"使用哪个分支" |
 | FlagGems 仓库地址 | `https://github.com/FlagOpen/FlagGems.git` | 无需用户提供 |
-| FlagScale 仓库地址 | `https://github.com/FlagOpen/FlagScale.git` | 无需用户提供 |
-| FlagCX 仓库地址 | `https://github.com/FlagOpen/FlagCX.git` | 无需用户提供 |
 | 性能目标 | 80% of native | 不询问"目标是多少" |
 | pip install 模式 | `pip install .`（非 editable） | 避免 `-e .` 在容器中的问题 |
 | 服务端口 | 从 README/容器配置中提取 | 不询问端口号 |
@@ -125,9 +80,8 @@
 
 1. **docker run 命令最终确认** — 不可逆操作，需用户确认参数
 2. **容器网络不通且需要代理配置** — 自动检测网络后才问
-3. **贪心搜索 3 轮仍未达标** — 需要用户决定是否继续
-4. **升级后性能严重劣化（<70%）** — 需要用户确认是否回退
-5. **精度评测是否执行** — FlagOS 服务启动后、性能测试前，询问用户是否需要精度评测
+3. **搜索 3 轮仍未达标** — 需要用户决定是否继续
+4. **精度评测是否执行** — FlagOS 服务启动后、性能测试前，询问用户是否需要精度评测
 
 ---
 
@@ -143,11 +97,12 @@ bash skills/flagos-container-preparation/tools/setup_workspace.sh $CONTAINER
 部署的脚本清单：
 - `inspect_env.py` — 环境检查（替代 10+ 次 docker exec）
 - `toggle_flaggems.py` — FlagGems 开关切换（替代 sed）
-- `upgrade_component.py` — 组件升级（含网络降级）
 - `wait_for_service.sh` — 服务就绪检测（指数退避）
 - `benchmark_runner.py` — 性能测试
 - `performance_compare.py` — 性能对比
 - `operator_optimizer.py` — 算子优化
+- `operator_search.py` — 算子搜索编排
+- `eval_monitor.py` — 评测监控
 
 ---
 
@@ -164,22 +119,19 @@ bash skills/flagos-container-preparation/tools/setup_workspace.sh $CONTAINER
 
 ## 标准性能对比输出格式
 
-**Scenario B（升级场景）标准输出表格**：
+使用 `python performance_compare.py --format markdown` 生成标准 markdown 表格：
 
 ```
-| Test Case | Native TPS | FlagOS Before TPS | Ratio      | FlagOS After TPS | Ratio      | Best Concurrency |
-| --------- | ---------- | ----------------- | ---------- | ---------------- | ---------- | ---------------- |
-| 1k→1k     | 17328      | 17511             | **101.1%** | 17325            | **100.0%** | 256              |
+| Test Case | Concurrency | Native TPS | FlagOS Initial TPS | Ratio      |
+| --------- | ----------- | ---------- | ------------------ | ---------- |
+| 1k→1k     | 256         | 17328      | 17511              | **101.1%** |
 ```
 
 格式规则：
 - TPS 列使用 Total Token throughput（input + output）
 - Test Case 使用简写 `1k→1k` 而非 `1k_input_1k_output`
 - Ratio 列加粗显示
-- 包含 Best Concurrency 列
-- 使用 `python performance_compare.py --format markdown` 生成
-
-**Scenario A 标准输出**：仅 Native / FlagOS Initial / FlagOS Optimized 三列。
+- 列：Native / FlagOS Initial / FlagOS Optimized（优化后才有第三列）
 
 ---
 
