@@ -26,7 +26,7 @@ echo ""
 # 1. 创建容器内目录结构
 echo "[1/4] 创建目录结构..."
 docker exec "${CONTAINER}" bash -c "
-    mkdir -p /flagos-workspace/{scripts,logs,results,reports,eval,perf/config,shared,output}
+    mkdir -p /flagos-workspace/{scripts,logs,results,reports,eval,perf/config,shared,output,traces,config}
 "
 echo "  目录创建完成"
 

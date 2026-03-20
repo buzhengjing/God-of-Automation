@@ -506,6 +506,8 @@ ${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_search.py run \
   --max-rounds 20
 ```
 
+搜索阶段每轮 benchmark **始终使用 quick**（只跑 prefill1_decode512），无需配置。quick 足以判断单算子对性能的影响。
+
 脚本自动完成：next→应用算子配置→清除Triton cache→重启服务→验证 txt→quick benchmark→更新结果→循环。
 
 **备选方式：手动逐步搜索**（需要更细粒度控制时使用）：
@@ -598,27 +600,37 @@ optimization:
 
 ---
 
+# 累计替换报告格式
+
+每次算子替换后，必须向用户输出以下格式的累计报告：
+
+```
+算子替换累计报告
+========================================
+已剔除算子 (共 N 个):
+  1. softmax    — 原因: 精度评测报错 (CUDA error)
+  2. layer_norm — 原因: 精度评测报错 (NaN output)
+  3. fused_moe  — 原因: 性能拖慢 (禁用后 +15%)
+当前启用: 45/48 个算子
+替换方式: plugin_env / yaml_config / only_enable / source_edit
+========================================
+```
+
+**报告规则**：
+- 每次替换后累计更新，不是只报告本次
+- 区分精度原因和性能原因
+- 性能原因标注禁用后的提升幅度
+
+---
+
 # 完成条件
 
-## 被动排除模式
-- 当前可用算子已查询
-- 需要替换的算子已确定
-- 已对照已知问题模式库
-- GPU 架构已检查
-- 操作层级已根据 capabilities 自动选择
 - 替换操作已执行（含 dispatch 层同步）
-- 替换详情（含回滚方式）已报告给用户
-- context.yaml 已更新
-- 已提醒用户重启服务
-
-## 主动优化模式
-- 算子列表已导出
-- 优化器已初始化（分组二分或线性）
-- 搜索已完成（或用户终止）
-- 最终算子配置已应用（含 dispatch 层）
-- 验证 benchmark 确认达标
+- **累计替换报告已输出给用户**
 - operator_config.json 已保存
-- context.yaml 已更新 optimization 字段
+- context.yaml 已更新
+- Plugin 场景的 env_config.sh 同时保存到 `config/env_config.sh`
+- `traces/11_operator_replacement.json` 已写入（记录搜索策略、每轮测试命令、禁用算子列表、最终性能比）
 
 ---
 

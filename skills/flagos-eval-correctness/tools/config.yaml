@@ -16,7 +16,8 @@ evaluation:
   erqa_samples: 400                  # Max ERQA samples to evaluate
 
 datasets:
-  aime_path: "datasets/AIME"         # AIME dataset path
+  aime_path: "datasets/AIME"         # AIME dataset path (full eval)
+  aime25_path: "datasets/AIME25"     # AIME25 dataset path (quick eval)
   erqa_path: "datasets/ERQA"         # ERQA dataset path
 
 output:

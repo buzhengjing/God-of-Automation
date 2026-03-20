@@ -199,22 +199,30 @@ Only include the number, no units or explanations inside the answer tags."""
             return None, None
 
 
-def evaluate_aime(config: dict, dry_run: bool = False, log_file: str = "eval_aime_progress.log") -> dict:
+def evaluate_aime(config: dict, dry_run: bool = False, quick: bool = False, log_file: str = "eval_aime_progress.log") -> dict:
     """
     Main evaluation function for AIME dataset.
 
     Args:
         config: Configuration dictionary from config.yaml
         dry_run: If True, use mock responses instead of API calls
+        quick: If True, use AIME25 dataset with no sample limit
         log_file: Progress log file path
 
     Returns:
         Evaluation results in the required JSON format
     """
     model_name = config['model']['name']
-    dataset_path = config['datasets']['aime_path']
     tolerance = config.get('evaluation', {}).get('tolerance', 0.01)
-    max_samples = config.get('evaluation', {}).get('aime_samples', 150)
+
+    if quick:
+        dataset_path = config['datasets']['aime25_path']
+        dataset_label = "AIME25_0fewshot_@avg1"
+        max_samples = None  # AIME25 题量少，全跑
+    else:
+        dataset_path = config['datasets']['aime_path']
+        dataset_label = "AIME_0fewshot_@avg1"
+        max_samples = config.get('evaluation', {}).get('aime_samples', 150)
 
     # 初始化进度日志
     progress = ProgressLogger(log_file)
@@ -239,6 +247,7 @@ def evaluate_aime(config: dict, dry_run: bool = False, log_file: str = "eval_aim
     progress.log("=" * 50)
     progress.log(f"AIME Evaluation Started")
     progress.log(f"Model: {model_name}")
+    progress.log(f"Dataset: {dataset_path} ({'quick' if quick else 'full'})")
     progress.log(f"Total samples: {total}")
     progress.log("=" * 50)
 
@@ -285,7 +294,7 @@ def evaluate_aime(config: dict, dry_run: bool = False, log_file: str = "eval_aim
                 "details": [
                     {
                         "status": "S",
-                        "dataset": "AIME_0fewshot_@avg1",
+                        "dataset": dataset_label,
                         "accuracy": round(accuracy, 2),
                         "rawDetails": {}
                     }
@@ -306,6 +315,8 @@ def main():
                         help='Path to configuration file (default: config.yaml)')
     parser.add_argument('--dry-run', action='store_true',
                         help='Run in dry-run mode with mock responses')
+    parser.add_argument('--quick', action='store_true',
+                        help='Quick mode: use AIME25 dataset, no sample limit')
     parser.add_argument('--output', type=str, default='aime_result.json',
                         help='Output JSON file path (default: aime_result.json)')
     parser.add_argument('--log', type=str, default='eval_aime_progress.log',
@@ -325,7 +336,7 @@ def main():
         sys.exit(1)
 
     # Run evaluation
-    result = evaluate_aime(config, dry_run=args.dry_run, log_file=args.log)
+    result = evaluate_aime(config, dry_run=args.dry_run, quick=args.quick, log_file=args.log)
 
     # Output result to JSON file
     with open(args.output, 'w', encoding='utf-8') as f:

@@ -63,10 +63,27 @@
 ⑬ 三版性能对比 + 生成最终报告
 ```
 
-**三版结果文件**：
-- `native_performance.json` — Native（无 FlagGems）
-- `flagos_full.json` — Full FlagGems（全量算子）
-- `flagos_optimized.json` — Optimized FlagGems（≥80% 组合）
+### Quick 模式与正式评测（二阶段）
+
+流程支持两种执行模式，用户在流程开始前选择：
+
+**Quick 模式**（筛查阶段）：
+- 全 ①-⑬ 步骤完整执行，流程和算子替换逻辑**与标准模式完全一致**
+- 区别仅在于：性能测试用 `--strategy quick`（只跑 prefill1_decode512），精度评测用 `--quick`（AIME25 only）
+- 目标：验证流程可走通 + 快速筛查算子问题（启动崩溃、eval 报错、精度不达标、性能不达标）
+- 算子搜索内部始终用 quick benchmark，与外层模式无关
+
+**正式评测**（复测阶段）：
+- Quick 筛查完毕、算子问题已修复后，从步骤⑤或⑥开始复测
+- 性能测试切换为 `fast`（饱和即停）或 `comprehensive`（全跑）
+- 精度评测切换为完整模式（AIME + ERQA 或远端 FlagRelease）
+- 跳过 ①②③④，直接复用已修复的环境和算子配置
+- 产出正式的三版结果文件用于最终报告
+
+**三版结果文件**（均位于 `results/` 目录下）：
+- `results/native_performance.json` — Native（无 FlagGems）
+- `results/flagos_full.json` — Full FlagGems（全量算子）
+- `results/flagos_optimized.json` — Optimized FlagGems（≥80% 组合）
 
 **FlagTree 安装失败恢复策略**：
 1. **优先方案**：重新 `docker run` 一个新容器（最可靠，一步还原全部环境），需用户确认
@@ -124,6 +141,124 @@ bash skills/flagos-container-preparation/tools/setup_workspace.sh $CONTAINER
 
 ---
 
+## 宿主机工作目录结构
+
+宿主机 `/data/flagos-workspace/<model>/` 挂载到容器 `/flagos-workspace`，统一使用四个子目录：
+
+```
+/data/flagos-workspace/<model>/          ← 挂载到容器 /flagos-workspace
+├── results/                              # 最终交付物
+│   ├── native_performance.json
+│   ├── flagos_full.json
+│   ├── flagos_optimized.json             # 仅不达标时产出
+│   ├── ops_list.json
+│   ├── performance_compare.csv           # 首次对比
+│   ├── performance_compare_final.csv     # 最终三版对比
+│   ├── aime_result.json
+│   ├── erqa_result.json                  # quick 模式无此文件
+│   └── eval_result.json                  # 远端评测结果
+│
+├── traces/                               # 每步留痕（JSON）
+│   ├── 01_container_preparation.json
+│   ├── 02_environment_inspection.json
+│   ├── 03_service_startup_default.json
+│   ├── 04_flagtree_installation.json     # 可选
+│   ├── 05_eval_native.json               # 可选
+│   ├── 06_perf_native.json
+│   ├── 07_service_startup_flagos.json
+│   ├── 08_eval_full_flagos.json          # 可选
+│   ├── 09_perf_full_flagos.json
+│   ├── 10_performance_compare.json
+│   ├── 11_operator_replacement.json      # 仅不达标时
+│   ├── 12_perf_optimized.json            # 仅不达标时
+│   └── 13_final_report.json
+│
+├── logs/                                 # 运行日志
+│   ├── startup_default.log
+│   ├── startup_native.log
+│   ├── startup_flagos.log
+│   ├── eval_aime_progress.log
+│   └── eval_erqa_progress.log
+│
+└── config/                               # 使用的配置快照
+    ├── perf_config.yaml
+    ├── eval_config.yaml
+    ├── env_config.sh                     # Plugin 场景
+    └── context_snapshot.yaml             # 流程结束时的完整 context
+```
+
+目录创建时机：容器准备阶段由 `setup_workspace.sh` 自动创建。
+
+---
+
+## Trace 留痕规范
+
+**强制规则**：每个 Skill 完成后，Claude 必须在 `traces/` 下写入对应步骤的 trace JSON 文件。
+
+### Trace JSON 统一格式
+
+```json
+{
+  "step": "01_container_preparation",
+  "title": "容器准备",
+  "timestamp_start": "2026-03-20T15:30:00",
+  "timestamp_end": "2026-03-20T15:32:00",
+  "duration_seconds": 120,
+  "status": "success | failed | skipped",
+  "actions": [
+    {
+      "action": "docker_run",
+      "command": "docker run -d --name xxx --gpus all ...",
+      "timestamp": "2026-03-20T15:30:05",
+      "status": "success",
+      "output_summary": "Container abc123 started"
+    }
+  ],
+  "result_files": ["results/native_performance.json"],
+  "context_updates": {
+    "container.name": "xxx",
+    "gpu.count": 8
+  }
+}
+```
+
+**字段说明**：
+- `actions[]`: 该步骤中执行的每个关键操作
+- `command`: 实际执行的完整命令字符串
+- `output_summary`: 关键输出摘要（不是全量 stdout）
+- `result_files`: 该步骤产出的结果文件路径（相对于工作目录）
+- `context_updates`: 该步骤写入 context.yaml 的字段
+
+### 每步 trace 记录内容
+
+| 步骤 | trace 文件 | 记录的 actions |
+|------|-----------|----------------|
+| ①容器准备 | `01_container_preparation.json` | docker run 命令（含完整参数）、setup_workspace 部署结果 |
+| ②环境检测 | `02_environment_inspection.json` | inspect_env.py 命令、关键输出（包版本、FlagGems 控制方式、FlagTree 状态） |
+| ③初始启动 | `03_service_startup_default.json` | 启动命令、env vars、健康检查结果、端口 |
+| ④FlagTree | `04_flagtree_installation.json` | install_flagtree.sh 命令、安装结果、verify 输出 |
+| ⑤精度native | `05_eval_native.json` | 评测方式(remote/local/quick)、提交参数/命令、精度结果 |
+| ⑥性能native | `06_perf_native.json` | benchmark_runner.py 命令（含 --strategy）、用例列表、峰值吞吐 |
+| ⑦启动flagos | `07_service_startup_flagos.json` | toggle 命令、启动命令、ops_list 记录命令、健康检查 |
+| ⑧精度full | `08_eval_full_flagos.json` | 同⑤ |
+| ⑨性能full | `09_perf_full_flagos.json` | 同⑥ |
+| ⑩性能对比 | `10_performance_compare.json` | compare 命令、对比结果摘要（达标/不达标）、返回码 |
+| ⑪算子替换 | `11_operator_replacement.json` | 搜索策略、每轮测试命令、禁用算子列表、最终性能比 |
+| ⑫性能optimized | `12_perf_optimized.json` | 同⑥ |
+| ⑬最终报告 | `13_final_report.json` | 三版对比命令、最终对比表格、结论 |
+
+### Trace 写入方式
+
+由 Claude 编排层通过 shell heredoc 写 JSON 到容器内 `/flagos-workspace/traces/` 目录，例如：
+
+```bash
+docker exec $CONTAINER bash -c "cat > /flagos-workspace/traces/01_container_preparation.json << 'TRACE_EOF'
+{...trace JSON...}
+TRACE_EOF"
+```
+
+---
+
 ## 网络问题自动降级策略
 
 容器内网络不通时，**不立即询问用户**，按以下顺序自动处理：
@@ -154,13 +289,54 @@ bash skills/flagos-container-preparation/tools/setup_workspace.sh $CONTAINER
 
 ---
 
+## 最终报告格式
+
+流程结束时（步骤⑬）必须输出完整的迁移发布报告：
+
+**交付物清单**：
+- `results/` — 性能/精度结果文件
+- `traces/` — 全流程执行留痕
+- `logs/` — 服务和评测运行日志
+- `config/context_snapshot.yaml` — 流程结束时的完整 context 快照
+
+```
+FlagOS 迁移发布报告
+========================================
+模型: <model_name>
+GPU: <gpu_count>x <gpu_type>
+容器: <container_name>
+
+算子状态:
+  全量算子: XX 个
+  最终启用: XX 个
+  剔除算子: <op1>, <op2>, ...
+  剔除原因:
+    - <op1>: 精度评测报错 (CUDA error)
+    - <op2>: 性能拖慢 (禁用后 +XX%)
+
+精度评测:
+  AIME: XX.X%  ERQA: XX.X%
+  状态: 通过 / 有问题
+
+性能对比:
+| Test Case | Conc | Native TPS | Optimized TPS | Opt/Nat   | Full TPS | Full/Nat  |
+| --------- | ---- | ---------- | ------------- | --------- | -------- | --------- |
+| 1k→1k     | 256  | XXXXX      | XXXXX         | **XX.X%** | XXXXX    | **XX.X%** |
+
+结论: FlagOS Optimized 达标(≥80%) / 不达标
+========================================
+```
+
+---
+
 ## 关键约束
 
 1. **性能测试只能通过 `benchmark_runner.py` 执行**，禁止直接运行 `vllm bench serve`
 2. **FlagGems 开关只能通过 `toggle_flaggems.py` 切换**，禁止手动 sed
 3. **FlagTree 安装只能通过 `install_flagtree.sh` 执行**，禁止手动 pip install flagtree
-4. **所有操作在 `/flagos-workspace` 目录下执行**，确保日志可从宿主机访问
+4. **所有操作在 `/flagos-workspace` 目录下执行**，产出文件按类型分目录：`results/`（交付物）、`traces/`（留痕）、`logs/`（日志）、`config/`（配置快照）
 5. **context.yaml 是 Skill 间共享状态**，每个 Skill 完成后必须更新
+6. **每个 Skill 完成后必须写入对应的 trace JSON**，记录实际执行的命令、参数和关键输出
 
 ---
 

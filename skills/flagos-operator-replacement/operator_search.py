@@ -324,8 +324,8 @@ def verify_ops_via_txt() -> Optional[List[str]]:
 
 def run_benchmark_quick(perf_config: str, benchmark_script: str,
                         output_name: str = "search_benchmark") -> Dict[str, Any]:
-    """运行快速 benchmark（用于搜索阶段）"""
-    print("\n[运行 Benchmark]")
+    """运行快速 benchmark（搜索阶段始终用 quick，只需快速判断算子影响）"""
+    print("\n[运行 Benchmark] strategy=quick")
 
     output_dir = "/flagos-workspace/results"
     result = run_cmd(

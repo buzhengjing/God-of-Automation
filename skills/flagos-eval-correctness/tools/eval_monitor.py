@@ -47,11 +47,15 @@ from urllib.error import URLError, HTTPError
 DEFAULT_PLATFORM = "http://110.43.160.159:5050"
 
 # 轮询策略: (次数区间, 间隔秒数)
+# 优化：缩短间隔提升感知速度，同时增加轮询次数保持总覆盖时间
 POLL_STRATEGY = [
-    (5, 60),     # 第 1-5 次: 每 60 秒
-    (15, 180),   # 第 6-20 次: 每 3 分钟
+    (5, 30),     # 第 1-5 次: 每 30 秒（快速确认任务已启动）
+    (10, 60),    # 第 6-15 次: 每 60 秒
+    (15, 120),   # 第 16-30 次: 每 2 分钟
 ]
-MAX_POLLS = 20
+# 进度 > 80% 时切换到密集轮询（30s），见 poll_progress()
+FINISHING_INTERVAL = 30
+MAX_POLLS = 30
 MAX_NETWORK_FAILURES = 3
 
 
@@ -199,8 +203,19 @@ def poll_progress(request_id: str, domain: str = "NLP",
             print(f"\n[评测完成] status={status}")
             return {"finished": True, "status": status, "request_id": request_id}
 
+        # 自适应：进度 > 80% 时切换到密集轮询，快速感知完成
+        actual_interval = interval
+        if datasets_progress:
+            try:
+                pct = float(datasets_progress.strip('%').split('/')[-1]) if '/' in datasets_progress else float(datasets_progress.strip('%'))
+                if pct > 80:
+                    actual_interval = FINISHING_INTERVAL
+                    print(f"    (进度>80%, 切换密集轮询 {FINISHING_INTERVAL}s)")
+            except (ValueError, IndexError):
+                pass
+
         if i < MAX_POLLS:
-            time.sleep(interval)
+            time.sleep(actual_interval)
 
     print(f"\n[超出轮询上限] {MAX_POLLS} 次未完成，请稍后手动查询")
     return {"finished": False, "status": "polling_timeout",

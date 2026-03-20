@@ -1,8 +1,7 @@
 ---
 name: flagos-container-preparation
-description: 多入口容器准备，支持已有容器/已有镜像/README 解析，通过 setup_workspace.sh 一次性部署所有工具
-version: 4.0.0
-license: internal
+description: 多入口容器准备，支持已有容器/已有镜像/ModelScope URL，通过 setup_workspace.sh 一次性部署所有工具
+version: 5.0.0
 triggers:
   - container preparation
   - prepare container
@@ -13,92 +12,40 @@ next_skill: flagos-pre-service-inspection
 provides:
   - container.name
   - container.status
-  - image.name
-  - image.tag
   - model.name
-  - model.url
   - model.local_path
   - gpu.vendor
   - gpu.count
-  - workspace.host_path
-  - workspace.container_path
   - entry.type
-  - entry.source
 ---
 
-# 容器准备 Skill（多入口）
+# 容器准备 Skill
 
-支持三种入口场景，自动识别用户输入类型。容器就绪后，通过 `setup_workspace.sh` 一次性部署所有工具脚本。
-
-**工具脚本**:
-- `skills/flagos-container-preparation/tools/check_model_local.py` — 本地权重搜索
-- `skills/flagos-container-preparation/tools/setup_workspace.sh` — 一次性部署工具
+支持三种入口，自动识别用户输入类型。容器就绪后通过 `setup_workspace.sh` 一次性部署所有工具脚本。
 
 ---
 
-# 上下文集成
+# 用户输入
 
-## 读取
-
-无（流程起点）。用户提供以下任意一种输入：
-
-| 入口 | 用户提供什么 | 系统做什么 |
-|------|-------------|-----------|
-| **已有容器** | 容器名称（或容器 ID） | 跳过创建，直接验证 |
-| **已有镜像** | 镜像地址 + 模型名 + 模型路径 | docker run 创建容器 |
-| **README 链接** | ModelScope/HuggingFace URL | 解析 → docker pull → docker run |
-
-## 写入 shared/context.yaml
-
-```yaml
-entry:
-  type: "<existing_container|new_container|readme_parse>"
-  source: "<用户原始输入>"
-model:
-  name: "<模型名称>"
-  url: "<模型 URL>"
-  local_path: "<宿主机路径>"
-  container_path: "<容器内路径>"
-container:
-  name: "<容器名称>"
-  status: "running"
-image:
-  name: "<镜像名称>"
-  tag: "<镜像标签>"
-workspace:
-  host_path: "/data/flagos-workspace/<model_name>"
-  container_path: "/flagos-workspace"
-gpu:
-  vendor: "<nvidia|huawei|...>"
-  type: "<GPU 型号>"
-  count: <GPU 数量>
-  visible_devices_env: "<环境变量名>"
-```
+| 入口 | 用户提供 | 系统做什么 |
+|------|---------|-----------|
+| **已有容器** | 容器名称 | 跳过创建，直接验证 |
+| **已有镜像** | 镜像地址 + 模型名 + 宿主机模型路径 | docker run 创建容器 |
+| **ModelScope URL** | URL | API 解析 → docker pull → docker run |
 
 ---
 
 # 工作流程
 
-## 步骤 0 — 自动识别入口类型
-
-根据用户输入自动判断：
-- 包含 `http://` 或 `https://` → URL → 入口 3
-- 包含 `/` 和 `:` 且像 registry 地址 → 镜像 → 入口 2
-- 其他字符串 → 尝试作为容器名 → 入口 1
-
-## 步骤 0.5 — 本地权重检查（自动执行）
-
-在容器准备之前，先在宿主机搜索模型权重：
+## 步骤 1 — 本地权重检查
 
 ```bash
 python3 skills/flagos-container-preparation/tools/check_model_local.py \
     --model "<用户输入的模型名或URL>" --output-json
 ```
 
-- 找到（exit 0）→ 记录 `model.local_path`，后续 docker run 直接挂载此路径
-- 未找到（exit 1）→ 继续正常流程（下载或从 README 获取路径信息）
-
-此步骤在宿主机运行，不依赖容器。
+- 找到 → 记录 `model.local_path`，docker run 直接挂载
+- 未找到 → 自动 `modelscope download`（如有 URL）或要求用户提供路径
 
 ## 入口 1 — 已有容器
 
@@ -111,46 +58,149 @@ docker start <container_name>  # 如果停止
 
 ## 入口 2 — 已有镜像
 
-1. 自动检测 GPU 厂商（nvidia-smi / npu-smi / ...）
-2. 创建宿主机工作目录
-3. 生成 docker run 命令（**需用户确认**）
-4. 验证容器状态
+1. 自动检测 GPU 厂商
+2. **根据 GPU 厂商选择对应模板**，填充变量后生成 docker run 命令（**需用户确认**）
+3. 验证容器状态
 
-## 入口 3 — README 解析
+### docker run 命令模板
 
-1. WebFetch 解析 URL / curl 调用 ModelScope API
-2. 提取镜像地址、启动命令、模型信息
-3. docker pull
-4. 按入口 2 流程创建容器
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `${CONTAINER_NAME}` | 容器名称 | `<model_name>_flagos` |
+| `${MODEL_PATH}` | 宿主机模型路径 | 用户提供 |
+| `${CONTAINER_MODEL_PATH}` | 容器内模型路径 | 用户提供 |
+| `${WORKSPACE_PATH}` | 宿主机工作目录 | `/data/flagos-workspace` |
+| `${SHM_SIZE}` | 共享内存 | `64g` |
+| `${IMAGE}` | 镜像地址 | 用户提供 |
 
-## 步骤 5 — 一次性部署工具脚本
+#### 模板 A：NVIDIA
 
-**容器创建/验证完成后，立即执行**：
+```bash
+docker run -d --name ${CONTAINER_NAME} \
+    --net=host --ipc=host --privileged \
+    --gpus all --shm-size=${SHM_SIZE:-64g} \
+    --ulimit memlock=-1 --security-opt=seccomp=unconfined \
+    -v ${MODEL_PATH}:${CONTAINER_MODEL_PATH} \
+    -v ${WORKSPACE_PATH:-/data/flagos-workspace}:/flagos-workspace \
+    ${IMAGE} sleep infinity
+```
+
+#### 模板 B：Ascend（华为昇腾）
+
+```bash
+docker run -d --name ${CONTAINER_NAME} \
+    --net=host --ipc=host --privileged \
+    --shm-size=${SHM_SIZE:-64g} \
+    -v /usr/local/Ascend/driver:/usr/local/Ascend/driver \
+    -v /usr/local/bin/npu-smi:/usr/local/bin/npu-smi \
+    -v /usr/local/dcmi:/usr/local/dcmi \
+    -v /usr/local/sbin:/usr/local/sbin \
+    -v /etc/ascend_install.info:/etc/ascend_install.info \
+    -v ${MODEL_PATH}:${CONTAINER_MODEL_PATH} \
+    -v ${WORKSPACE_PATH:-/data/flagos-workspace}:/flagos-workspace \
+    -e PYTORCH_NPU_ALLOC_CONF=max_split_size_mb:256 \
+    ${IMAGE} bash
+```
+
+#### 模板 C：Moore Threads（摩尔线程）
+
+```bash
+docker run -d --name ${CONTAINER_NAME} \
+    --net=host --ipc=host --privileged \
+    --shm-size=${SHM_SIZE:-16g} \
+    --cap-add=SYS_PTRACE --security-opt seccomp=unconfined \
+    --tmpfs /tmp:exec \
+    -e MTHREADS_VISIBLE_DEVICES=all \
+    -e MTHREADS_DRIVER_CAPABILITIES=all \
+    -v ${MODEL_PATH}:${CONTAINER_MODEL_PATH} \
+    -v ${WORKSPACE_PATH:-/data/flagos-workspace}:/flagos-workspace \
+    ${IMAGE} sleep infinity
+```
+
+#### 模板 D：MetaX（沐曦）
+
+```bash
+docker run -d --name ${CONTAINER_NAME} \
+    --net=host --ipc=host --privileged \
+    --shm-size=${SHM_SIZE:-64g} \
+    --group-add video --ulimit memlock=-1 \
+    --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+    --device=/dev/dri --device=/dev/mxcd \
+    -v ${MODEL_PATH}:${CONTAINER_MODEL_PATH} \
+    -v ${WORKSPACE_PATH:-/data/flagos-workspace}:/flagos-workspace \
+    ${IMAGE} bash
+```
+
+#### 模板 E：Cambricon（寒武纪）
+
+```bash
+docker run -d --name ${CONTAINER_NAME} \
+    --net=host --pid=host --ipc=host --privileged \
+    -v /usr/bin/cnmon:/usr/bin/cnmon \
+    -v ${MODEL_PATH}:${CONTAINER_MODEL_PATH} \
+    -v ${WORKSPACE_PATH:-/data/flagos-workspace}:/flagos-workspace \
+    -v /data:/data \
+    ${IMAGE} bash
+```
+
+**模板规则**：
+- 业务环境变量（`USE_FLAGGEMS`、`VLLM_USE_V1` 等）不写入模板，由后续 skill 按需添加
+- 所有模板统一挂载 `/flagos-workspace`
+- 生成命令后必须展示给用户确认
+
+## 入口 3 — ModelScope / HuggingFace URL
+
+1. 从 URL 提取 `<owner>/<model_name>`，调用 API 获取 README：
+
+```bash
+curl -s "https://modelscope.cn/api/v1/models/<owner>/<model_name>"
+```
+
+2. 从返回的 README 中提取：镜像地址、启动参数、模型路径
+3. docker pull + 按入口 2 流程创建容器
+
+**API 访问失败时**，模型名称和路径已从 URL 推导，只需用户补充镜像地址。
+
+## 步骤 — 部署工具脚本
+
+容器就绪后立即执行：
 
 ```bash
 bash skills/flagos-container-preparation/tools/setup_workspace.sh $CONTAINER
 ```
 
-此脚本一次性完成：
-1. 创建 `/flagos-workspace` 全部子目录
-2. 复制所有工具脚本到容器（inspect_env.py, toggle_flaggems.py, wait_for_service.sh, benchmark_runner.py, performance_compare.py, operator_optimizer.py, operator_search.py, eval_monitor.py）
-3. 安装脚本依赖（pyyaml 等）
-4. 验证所有脚本可执行
+此命令自动创建 `results/`、`traces/`、`logs/`、`config/` 四个子目录并部署所有脚本。
 
-## 步骤 6 — 写入 context.yaml
+## 步骤 — 写入 context.yaml
+
+```yaml
+entry:
+  type: "<existing_container|new_container|url_parse>"
+container:
+  name: "<容器名称>"
+  status: "running"
+model:
+  name: "<模型名称>"
+  local_path: "<宿主机路径>"
+  container_path: "<容器内路径>"
+gpu:
+  vendor: "<nvidia|huawei|mthreads|metax|cambricon>"
+  type: "<GPU 型号>"
+  count: <数量>
+workspace:
+  host_path: "/data/flagos-workspace"
+  container_path: "/flagos-workspace"
+```
 
 ---
 
 # 完成条件
 
-- 本地权重检查已完成（check_model_local.py）
-- 入口类型已自动识别
-- GPU 厂商已识别
-- 容器已运行
-- 容器内 GPU 可见
-- 模型目录已确认
-- **工具脚本已通过 setup_workspace.sh 一次性部署**
+- 容器已运行，GPU 可见，模型目录已确认
+- 工具脚本已通过 setup_workspace.sh 部署
+- 四个子目录已创建（results/、traces/、logs/、config/）
 - context.yaml 已更新
+- `traces/01_container_preparation.json` 已写入（记录 docker run 命令、setup_workspace 部署结果）
 
 ---
 
@@ -160,8 +210,6 @@ bash skills/flagos-container-preparation/tools/setup_workspace.sh $CONTAINER
 |------|----------|
 | GPU 未检测到 | 检查驱动安装 |
 | 镜像拉取失败 | 检查网络，或 `docker load` 导入 |
-| setup_workspace.sh 失败 | 检查 Docker 容器是否运行，手动 docker cp |
-| 已有容器无 /flagos-workspace | setup_workspace.sh 自动创建 |
-| README 解析失败 | 手动提供镜像地址 |
+| setup_workspace.sh 失败 | 检查容器是否运行，手动 docker cp |
 
-下一步应执行 **flagos-pre-service-inspection**。
+下一步：**flagos-pre-service-inspection**

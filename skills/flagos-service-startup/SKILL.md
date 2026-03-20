@@ -52,8 +52,11 @@ provides:
 所有服务启动操作在 `/flagos-workspace` 目录下执行。
 
 ```
-容器内: /flagos-workspace/output/ ← 服务日志
-宿主机: /data/flagos-workspace/<model_name>/output/ ← 实时同步
+容器内: /flagos-workspace/logs/ ← 服务日志（按模式命名）
+  startup_default.log  — 步骤③ default 模式
+  startup_native.log   — 步骤⑥ native 模式
+  startup_flagos.log   — 步骤⑦ flagos 模式
+宿主机: /data/flagos-workspace/<model_name>/logs/ ← 实时同步
 ```
 
 ---
@@ -146,15 +149,60 @@ docker exec $CONTAINER python3 /flagos-workspace/scripts/toggle_flaggems.py --ac
 
 **非 plugin 场景**：
 ```bash
-docker exec -d $CONTAINER bash -c "cd /flagos-workspace && <startup_command> > /flagos-workspace/output/startup.log 2>&1"
+docker exec -d $CONTAINER bash -c "cd /flagos-workspace && <startup_command> > /flagos-workspace/logs/startup_<mode>.log 2>&1"
 ```
 
 **Plugin 场景**（带环境变量）：
 ```bash
-docker exec -d $CONTAINER bash -c "cd /flagos-workspace && source /flagos-workspace/env_config.sh && <startup_command> > /flagos-workspace/output/startup.log 2>&1"
+docker exec -d $CONTAINER bash -c "cd /flagos-workspace && source /flagos-workspace/env_config.sh && <startup_command> > /flagos-workspace/logs/startup_<mode>.log 2>&1"
 ```
 
-启动命令根据容器配置确定（flagscale serve / vllm serve / sglang launch_server）。
+其中 `<mode>` 为 `default`、`native` 或 `flagos`，与启动模式对应。
+
+### Plugin 场景 vllm 服务启动模板
+
+Plugin 环境下服务启动命令统一使用标准 vllm 格式，FlagGems 控制通过 `env_config.sh` 环境变量注入，与启动命令分离。
+
+```bash
+vllm serve ${MODEL_PATH} \
+    --host 0.0.0.0 \
+    --port ${PORT:-8000} \
+    --served-model-name ${MODEL_NAME} \
+    --tensor-parallel-size ${TP_SIZE} \
+    --max-num-batched-tokens ${MAX_BATCHED_TOKENS:-16384} \
+    --max-num-seqs ${MAX_NUM_SEQS:-256} \
+    --max-model-len ${MAX_MODEL_LEN:-8192} \
+    --trust-remote-code
+```
+
+**可选参数**（按需添加）：
+
+| 参数 | 场景 | 示例 |
+|------|------|------|
+| `--pipeline-parallel-size` | 多机或超大模型 | `--pipeline-parallel-size 2` |
+| `--gpu-memory-utilization` | 需限制显存占用 | `--gpu-memory-utilization 0.8` |
+| `--reasoning-parser` | Thinking model | `--reasoning-parser qwen3` |
+
+**三种模式启动方式**：
+
+```bash
+# Native（关闭 FlagGems）— env_config.sh 含 VLLM_FL_PREFER_ENABLED=false
+docker exec -d $CONTAINER bash -c "cd /flagos-workspace && source /flagos-workspace/env_config.sh && vllm serve ... > /flagos-workspace/logs/startup_native.log 2>&1"
+
+# FlagOS Full（全量 FlagGems）— env_config.sh 含 VLLM_FL_PREFER_ENABLED=true + 清除 blacklist
+docker exec -d $CONTAINER bash -c "cd /flagos-workspace && source /flagos-workspace/env_config.sh && vllm serve ... > /flagos-workspace/logs/startup_flagos.log 2>&1"
+
+# FlagOS Optimized（自定义 blacklist）— env_config.sh 含 VLLM_FL_*_BLACKLIST
+docker exec -d $CONTAINER bash -c "cd /flagos-workspace && source /flagos-workspace/env_config.sh && vllm serve ... > /flagos-workspace/logs/startup_flagos.log 2>&1"
+```
+
+三种模式命令格式相同，差异仅在 `env_config.sh` 内容（由 `toggle_flaggems.py` 或 `apply_op_config.py` 生成）。
+
+**模板使用规则**：
+- 具体参数值从容器 README / 用户输入 / context.yaml 获取
+- `--served-model-name` 默认使用模型目录名
+- `--tensor-parallel-size` 默认等于 GPU 数量
+- 业务环境变量（`VLLM_USE_MODELSCOPE` 等）按需在 docker exec 中追加，不写入模板
 
 ### max_model_len 决策规则
 
@@ -200,7 +248,7 @@ vllm serve <model_path> --max-model-len 16384 ...  # thinking model 最低线
 docker exec $CONTAINER bash -c "/flagos-workspace/scripts/wait_for_service.sh --port $PORT --model-name '$MODEL_NAME' --timeout 300"
 ```
 
-自动指数退避轮询（2s, 4s, 8s, 16s, 最大 30s），超时自动分析日志。
+自动轮询（2s→4s→5s 快速收敛，最大间隔 5s），超时自动分析日志。
 
 **启动后校验**：检查 `wait_for_service.sh` 输出的 `max_model_len`：
 - 如果是 thinking model 且 `max_model_len < 32768` → 警告，建议重启并加大 `--max-model-len`
@@ -227,11 +275,24 @@ curl -s http://localhost:$PORT/v1/chat/completions \
 ============================================================
 ```
 
-## 步骤 7 — 检查 gems.txt（flagos 模式时）
+## 步骤 7 — 记录算子列表（flagos 模式时，强制）
+
+FlagGems 启用状态下，**必须记录算子列表**，这是后续算子优化的搜索空间来源。
 
 ```bash
+# 自动发现并保存算子列表
+docker exec $CONTAINER python3 /flagos-workspace/scripts/operator_optimizer.py discover \
+  --save-ops /flagos-workspace/results/ops_list.json
+
+# 检查运行时 gems.txt
 docker exec $CONTAINER find / -name "gems.txt" 2>/dev/null
-docker exec $CONTAINER cat <gems_txt_path>
+```
+
+**反馈输出**：
+```
+FlagGems 已启用，记录算子列表：XX 个算子
+算子列表已保存: /flagos-workspace/results/ops_list.json
+gems.txt 路径: /path/to/gems.txt
 ```
 
 ## 步骤 8 — 写入 context.yaml
@@ -308,6 +369,10 @@ docker exec $CONTAINER bash /flagos-workspace/scripts/install_flagtree.sh uninst
 - 已输出服务连接信息
 - gems.txt 已检查（flagos 模式）
 - context.yaml 已更新
+- 对应 trace 文件已写入：
+  - default 模式 → `traces/03_service_startup_default.json`
+  - native 模式（步骤⑥前）→ 记录在 `traces/06_perf_native.json` 的 actions 中
+  - flagos 模式 → `traces/07_service_startup_flagos.json`
 
 ---
 

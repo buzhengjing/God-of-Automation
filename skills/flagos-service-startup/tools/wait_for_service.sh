@@ -39,9 +39,11 @@ if [ -n "$MODEL_NAME" ]; then
 fi
 echo ""
 
-# 指数退避轮询
+# 快速轮询 + 低上限退避
+# 服务检测是轻量 curl，不需要 30s 那么保守的退避
+# 初始 2s，上限 5s，确保服务就绪后最多 5s 内感知
 INTERVAL=2
-MAX_INTERVAL=30
+MAX_INTERVAL=5
 ELAPSED=0
 
 while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
@@ -145,7 +147,7 @@ if [ -n "$LOG_PATH" ] && [ -f "$LOG_PATH" ]; then
     tail -20 "$LOG_PATH"
 else
     # 尝试自动查找日志
-    LOG_FILES=$(find /flagos-workspace/output -name "*.log" -newer /proc/1/cmdline 2>/dev/null | head -3)
+    LOG_FILES=$(find /flagos-workspace/logs -name "*.log" -newer /proc/1/cmdline 2>/dev/null | head -3)
     if [ -n "$LOG_FILES" ]; then
         echo ""
         echo "自动发现的日志文件:"
