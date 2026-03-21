@@ -22,6 +22,28 @@ import sys
 from pathlib import Path
 
 
+def find_best_python():
+    """探测最佳 Python 解释器（优先 conda/venv）"""
+    candidates = [
+        "/opt/conda/bin/python3",
+        os.path.expanduser("~/miniconda3/bin/python3"),
+        os.path.expanduser("~/anaconda3/bin/python3"),
+    ]
+    # 检查 PATH 中是否有更高优先级的 python3
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    return sys.executable
+
+
+# 如果当前解释器不是最佳的，用最佳解释器重新执行自身
+if __name__ == '__main__' and not os.environ.get('_INSPECT_ENV_REEXEC'):
+    best = find_best_python()
+    if best != sys.executable and os.path.isfile(best):
+        os.environ['_INSPECT_ENV_REEXEC'] = '1'
+        os.execv(best, [best] + sys.argv)
+
+
 def run_cmd(cmd, timeout=30):
     """运行 shell 命令并返回 stdout"""
     try:

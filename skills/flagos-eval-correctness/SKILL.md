@@ -176,15 +176,21 @@ flagos-eval-correctness/
 
 ## tools/eval_aime.py
 
-AIME 数学竞赛评测脚本。加载 JSONL 格式数学题，调用模型 API，提取 `[[ANSWER]]数字[[/ANSWER]]` 格式答案，计算准确率。
+AIME 数学竞赛评测脚本。加载 JSONL 格式数学题，调用模型 API，提取 `[[ANSWER]]数字[[/ANSWER]]` 格式答案，计算准确率。支持并发请求加速评测。
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--config` | config.yaml | 配置文件 |
 | `--output` | aime_result.json | 结果文件 |
 | `--log` | eval_aime_progress.log | 进度日志 |
-| `--quick` | false | quick 模式：使用 AIME25 数据集，无样本数限制 |
+| `--quick` | false | quick 模式：使用 AIME25 数据集，默认全量并发 |
+| `--concurrency` | quick=0(全量并发), full=1(串行) | 并发请求数，0=自动(题目数) |
 | `--dry-run` | false | 测试模式 |
+
+**并发策略**：
+- `--quick` 模式默认全量并发（30 题同时请求），耗时从 30-60 分钟降至 1-3 分钟
+- 完整模式默认串行（避免大量并发影响服务稳定性），可通过 `--concurrency 10` 手动加速
+- vLLM 支持高并发（性能测试验证到 256），30 并发不会造成服务压力
 
 ## tools/eval_erqa.py
 
@@ -600,7 +606,7 @@ docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && source .venv/bin/ac
     nohup python eval_erqa.py --output /flagos-workspace/results/erqa_result.json --log /flagos-workspace/logs/eval_erqa_progress.log > /dev/null 2>&1 &"
 ```
 
-**quick 模式**（只跑 AIME25）：
+**quick 模式**（AIME25 全量并发，~1-3 分钟）：
 ```bash
 docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && source .venv/bin/activate && \
     python eval_aime.py --quick --output /flagos-workspace/results/aime_result.json --log /flagos-workspace/logs/eval_aime_progress.log"

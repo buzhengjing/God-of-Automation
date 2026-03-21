@@ -107,6 +107,13 @@ runtime:
 ## 步骤 1 — 停止现有服务
 
 ```bash
+# 推荐方式：docker restart 确保资源完全释放（避免僵尸进程占用显存）
+docker restart $CONTAINER
+sleep 5
+```
+
+备选方式（仅当不能重启容器时）：
+```bash
 docker exec $CONTAINER bash -c "pkill -f 'vllm\|sglang\|flagscale' 2>/dev/null; sleep 3"
 ```
 
@@ -128,7 +135,7 @@ Plugin 场景：
 ```bash
 docker exec $CONTAINER python3 /flagos-workspace/scripts/toggle_flaggems.py --action disable --integration-type plugin --json
 ```
-这会生成 `/flagos-workspace/env_config.sh`（内含 `VLLM_FL_PREFER_ENABLED=false`），启动服务前 source 此文件。
+输出 JSON 包含 `env_vars` 和 `env_inline` 字段，在启动命令中使用 `env_inline` 作为内联前缀。
 
 **FlagOS 模式**（启用 FlagGems）：
 
@@ -152,16 +159,16 @@ docker exec $CONTAINER python3 /flagos-workspace/scripts/toggle_flaggems.py --ac
 docker exec -d $CONTAINER bash -c "cd /flagos-workspace && <startup_command> > /flagos-workspace/logs/startup_<mode>.log 2>&1"
 ```
 
-**Plugin 场景**（带环境变量）：
+**Plugin 场景**（内联环境变量前缀）：
 ```bash
-docker exec -d $CONTAINER bash -c "cd /flagos-workspace && source /flagos-workspace/env_config.sh && <startup_command> > /flagos-workspace/logs/startup_<mode>.log 2>&1"
+docker exec -d $CONTAINER bash -c "cd /flagos-workspace && PATH=/opt/conda/bin:\$PATH <env_inline> <startup_command> > /flagos-workspace/logs/startup_<mode>.log 2>&1"
 ```
 
-其中 `<mode>` 为 `default`、`native` 或 `flagos`，与启动模式对应。
+其中 `<mode>` 为 `default`、`native` 或 `flagos`，`<env_inline>` 来自 `toggle_flaggems.py --json` 输出的 `env_inline` 字段。
 
 ### Plugin 场景 vllm 服务启动模板
 
-Plugin 环境下服务启动命令统一使用标准 vllm 格式，FlagGems 控制通过 `env_config.sh` 环境变量注入，与启动命令分离。
+Plugin 环境下服务启动命令统一使用标准 vllm 格式，FlagGems 控制通过**内联环境变量**注入，与启动命令分离。
 
 ```bash
 vllm serve ${MODEL_PATH} \
@@ -183,20 +190,23 @@ vllm serve ${MODEL_PATH} \
 | `--gpu-memory-utilization` | 需限制显存占用 | `--gpu-memory-utilization 0.8` |
 | `--reasoning-parser` | Thinking model | `--reasoning-parser qwen3` |
 
-**三种模式启动方式**：
+**四种模式启动方式**：
 
 ```bash
-# Native（关闭 FlagGems）— env_config.sh 含 VLLM_FL_PREFER_ENABLED=false
-docker exec -d $CONTAINER bash -c "cd /flagos-workspace && source /flagos-workspace/env_config.sh && vllm serve ... > /flagos-workspace/logs/startup_native.log 2>&1"
+# Default（不修改环境，原样启动）
+docker exec -d $CONTAINER bash -c "cd /flagos-workspace && PATH=/opt/conda/bin:\$PATH vllm serve ... > /flagos-workspace/logs/startup_default.log 2>&1"
 
-# FlagOS Full（全量 FlagGems）— env_config.sh 含 VLLM_FL_PREFER_ENABLED=true + 清除 blacklist
-docker exec -d $CONTAINER bash -c "cd /flagos-workspace && source /flagos-workspace/env_config.sh && vllm serve ... > /flagos-workspace/logs/startup_flagos.log 2>&1"
+# Native（关闭 FlagGems）
+docker exec -d $CONTAINER bash -c "cd /flagos-workspace && PATH=/opt/conda/bin:\$PATH USE_FLAGGEMS=0 VLLM_FL_PREFER_ENABLED=false vllm serve ... > /flagos-workspace/logs/startup_native.log 2>&1"
 
-# FlagOS Optimized（自定义 blacklist）— env_config.sh 含 VLLM_FL_*_BLACKLIST
-docker exec -d $CONTAINER bash -c "cd /flagos-workspace && source /flagos-workspace/env_config.sh && vllm serve ... > /flagos-workspace/logs/startup_flagos.log 2>&1"
+# FlagOS Full（全量 FlagGems）
+docker exec -d $CONTAINER bash -c "cd /flagos-workspace && PATH=/opt/conda/bin:\$PATH USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true vllm serve ... > /flagos-workspace/logs/startup_flagos.log 2>&1"
+
+# FlagOS Optimized（自定义 blacklist）
+docker exec -d $CONTAINER bash -c "cd /flagos-workspace && PATH=/opt/conda/bin:\$PATH USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true VLLM_FL_FLAGOS_BLACKLIST='mm,softmax' vllm serve ... > /flagos-workspace/logs/startup_flagos.log 2>&1"
 ```
 
-三种模式命令格式相同，差异仅在 `env_config.sh` 内容（由 `toggle_flaggems.py` 或 `apply_op_config.py` 生成）。
+四种模式差异仅在内联环境变量前缀（由 `toggle_flaggems.py` 或 `apply_op_config.py` 的 JSON 输出中的 `env_inline` 提供）。
 
 **模板使用规则**：
 - 具体参数值从容器 README / 用户输入 / context.yaml 获取
@@ -245,7 +255,11 @@ vllm serve <model_path> --max-model-len 16384 ...  # thinking model 最低线
 ## 步骤 4 — 等待服务就绪
 
 ```bash
+# Native 模式 / Default 模式
 docker exec $CONTAINER bash -c "/flagos-workspace/scripts/wait_for_service.sh --port $PORT --model-name '$MODEL_NAME' --timeout 300"
+
+# FlagGems 模式（CUDA graph 编译慢，需更长超时）
+docker exec $CONTAINER bash -c "/flagos-workspace/scripts/wait_for_service.sh --port $PORT --model-name '$MODEL_NAME' --timeout 600"
 ```
 
 自动轮询（2s→4s→5s 快速收敛，最大间隔 5s），超时自动分析日志。
@@ -314,7 +328,7 @@ environment:
 ## 1. 安装 FlagTree
 
 ```bash
-docker exec $CONTAINER bash /flagos-workspace/scripts/install_flagtree.sh install --vendor $GPU_VENDOR --version 0.4.0
+docker exec $CONTAINER bash /flagos-workspace/scripts/install_flagtree.sh install --vendor $GPU_VENDOR
 ```
 
 ## 2. 验证安装
@@ -335,6 +349,9 @@ docker exec $CONTAINER bash /flagos-workspace/scripts/install_flagtree.sh verify
 ---
 
 # FlagTree 安装失败恢复（步骤④c）
+
+**⚠️ 强制规则**：FlagTree 安装失败后，禁止在当前容器上继续任何操作（环境已被污染）。
+必须立即执行以下恢复流程，然后从步骤③重新开始。
 
 **优先方案**：重新 `docker run` 新容器
 - 使用 context.yaml 中的 `image` 信息重新创建

@@ -196,7 +196,7 @@ operator_replacement:
   replacement_mode: ""      # yaml_config | only_enable | enable_unused | source_edit | plugin_env
   final_gems_txt: ""        # 最终 gems.txt 内容/路径
   config_file_path: ""      # YAML 配置模式下的文件路径
-  env_config_path: ""       # Plugin 模式下的 env_config.sh 路径
+  env_vars: {}              # Plugin 模式下的当前环境变量快照
   available_ops: []         # 查询到的完整可用算子列表
   rollback_info: ""         # 如何还原此次替换操作
 

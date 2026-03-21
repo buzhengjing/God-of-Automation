@@ -125,6 +125,13 @@ if [ -f "${PROJECT_ROOT}/skills/flagos-container-preparation/tools/install_flagt
     echo "  ✓ install_flagtree.sh"
 fi
 
+# 评测配置模板
+if [ -f "${PROJECT_ROOT}/skills/flagos-eval-correctness/tools/config.yaml" ]; then
+    docker cp "${PROJECT_ROOT}/skills/flagos-eval-correctness/tools/config.yaml" \
+        "${CONTAINER}:/flagos-workspace/eval/config.yaml"
+    echo "  ✓ eval/config.yaml (模板)"
+fi
+
 echo "  共复制 ${SCRIPTS_COPIED} 个脚本"
 
 # 3. 安装脚本依赖（如需要）

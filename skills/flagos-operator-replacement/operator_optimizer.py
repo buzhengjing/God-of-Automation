@@ -54,6 +54,17 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 
+def env_to_inline(env_dict):
+    """将 env dict 转为内联前缀字符串: VAR1=val1 VAR2=val2"""
+    parts = []
+    for k, v in env_dict.items():
+        if " " in v or "'" in v:
+            parts.append(f"{k}='{v}'")
+        else:
+            parts.append(f"{k}={v}")
+    return " ".join(parts)
+
+
 # =============================================================================
 # 算子分组定义
 # =============================================================================
@@ -124,12 +135,20 @@ ATEN_TO_RUNTIME_MAP = {v: k for k, v in RUNTIME_TO_ATEN_MAP.items()}
 # 算子列表自动发现
 # =============================================================================
 
+# 运行时生成的算子列表文件（Plugin 架构下优先搜索）
+RUNTIME_OPLIST_PATHS = [
+    "/tmp/flaggems_enable_oplist.txt",
+    "/tmp/flaggems_oplist.txt",
+]
+
+
 def find_ops_list_file(gems_path: Optional[str] = None) -> Dict[str, Any]:
     """
-    自动搜索 flaggems 源码中记录算子启动列表的 txt 文件。
+    自动搜索 flaggems 算子列表文件。
 
-    不硬编码 gems.txt，而是在 flag_gems 安装目录下搜索所有 .txt 文件，
-    通过内容特征（每行一个算子名）识别算子列表文件。
+    搜索优先级：
+    1. 运行时生成的文件（/tmp/flaggems_enable_oplist.txt 等）
+    2. flag_gems 安装目录下的 .txt 文件（通过内容特征识别）
 
     Returns:
         {
@@ -137,6 +156,7 @@ def find_ops_list_file(gems_path: Optional[str] = None) -> Dict[str, Any]:
             "path": str,         # 找到的文件路径
             "ops": list,         # 解析出的算子列表
             "count": int,
+            "source": str,       # "runtime" | "source_code"
             "search_paths": list # 搜索过的路径
         }
     """
@@ -145,8 +165,31 @@ def find_ops_list_file(gems_path: Optional[str] = None) -> Dict[str, Any]:
         "path": "",
         "ops": [],
         "count": 0,
+        "source": "",
         "search_paths": [],
     }
+
+    # 第一优先级：运行时生成的算子列表文件
+    for rpath in RUNTIME_OPLIST_PATHS:
+        result["search_paths"].append(rpath)
+        if os.path.isfile(rpath):
+            try:
+                with open(rpath, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                if content:
+                    lines = [l.strip() for l in content.split('\n')
+                             if l.strip() and not l.strip().startswith('#')]
+                    if lines:
+                        result["found"] = True
+                        result["path"] = rpath
+                        result["ops"] = lines
+                        result["count"] = len(lines)
+                        result["source"] = "runtime"
+                        return result
+            except Exception:
+                continue
+
+    # 第二优先级：源码目录搜索（原有逻辑）
 
     # 确定搜索起点
     search_root = gems_path
@@ -196,6 +239,7 @@ def find_ops_list_file(gems_path: Optional[str] = None) -> Dict[str, Any]:
         result["path"] = best[2]
         result["ops"] = best[3]
         result["count"] = len(best[3])
+        result["source"] = "source_code"
         if len(candidates) > 1:
             result["other_candidates"] = [c[2] for c in candidates[1:]]
 
@@ -300,7 +344,6 @@ def init_optimization(ops_file: str, native_throughput: float,
                       group_search: bool = True,
                       plugin_mode: bool = False,
                       oot_ops: Optional[List[str]] = None,
-                      env_config_path: str = "/flagos-workspace/env_config.sh",
                       state_path: Optional[str] = None) -> Dict[str, Any]:
     """
     初始化优化状态。
@@ -313,7 +356,6 @@ def init_optimization(ops_file: str, native_throughput: float,
         group_search: 启用分组二分搜索（默认 True）
         plugin_mode: 是否为 plugin 场景（使用环境变量控制）
         oot_ops: 自定义 OOT 算子列表（默认使用 OOT_OPERATORS）
-        env_config_path: env_config.sh 输出路径
     """
     with open(ops_file, "r", encoding="utf-8") as f:
         ops_data = json.load(f)
@@ -385,7 +427,6 @@ def init_optimization(ops_file: str, native_throughput: float,
         "oot_state": oot_state,
         "oot_blacklist": [],
         "flagos_blacklist": [],
-        "env_config_path": env_config_path,
         "group_state": group_state,
         "groups": groups,
         "current_step": 0,
@@ -430,6 +471,7 @@ def get_next_action_oot(state: Dict[str, Any], state_path: Optional[str] = None)
             save_state(state, state_path)
 
             env_vars = {
+                "USE_FLAGGEMS": "1",
                 "VLLM_FL_PREFER_ENABLED": "true",
                 "VLLM_FL_OOT_BLACKLIST": ",".join(oot_blacklist),
             }
@@ -438,7 +480,7 @@ def get_next_action_oot(state: Dict[str, Any], state_path: Optional[str] = None)
                 "oot_blacklist": oot_blacklist,
                 "step": state["current_step"],
                 "env_vars": env_vars,
-                "env_config_cmd": f"source {state.get('env_config_path', '/flagos-workspace/env_config.sh')}",
+                "env_inline": env_to_inline(env_vars),
                 "message": f"OOT 累积验证: 禁用 {len(oot_blacklist)} 个 OOT 算子 ({', '.join(oot_blacklist)})",
             }
         else:
@@ -453,6 +495,7 @@ def get_next_action_oot(state: Dict[str, Any], state_path: Optional[str] = None)
     save_state(state, state_path)
 
     env_vars = {
+        "USE_FLAGGEMS": "1",
         "VLLM_FL_PREFER_ENABLED": "true",
         "VLLM_FL_OOT_BLACKLIST": current_op,
     }
@@ -469,7 +512,7 @@ def get_next_action_oot(state: Dict[str, Any], state_path: Optional[str] = None)
         "total_oot_ops": len(oot_ops),
         "oot_progress": f"{idx + 1}/{len(oot_ops)}",
         "env_vars": env_vars,
-        "env_config_cmd": f"source {state.get('env_config_path', '/flagos-workspace/env_config.sh')}",
+        "env_inline": env_to_inline(env_vars),
         "message": f"测试禁用 OOT 算子 {current_op} ({idx + 1}/{len(oot_ops)})",
     }
 
@@ -608,13 +651,13 @@ def get_next_action(state_path: Optional[str] = None) -> Dict[str, Any]:
     if state.get("plugin_mode") and action.get("action") not in ("completed", "failed", "error"):
         oot_bl = state.get("oot_blacklist", [])
         flagos_bl = action.get("test_disabled_ops", [])
-        env_vars = {"VLLM_FL_PREFER_ENABLED": "true"}
+        env_vars = {"USE_FLAGGEMS": "1", "VLLM_FL_PREFER_ENABLED": "true"}
         if oot_bl:
             env_vars["VLLM_FL_OOT_BLACKLIST"] = ",".join(oot_bl)
         if flagos_bl:
             env_vars["VLLM_FL_FLAGOS_BLACKLIST"] = ",".join(flagos_bl)
         action["env_vars"] = env_vars
-        action["env_config_cmd"] = f"source {state.get('env_config_path', '/flagos-workspace/env_config.sh')}"
+        action["env_inline"] = env_to_inline(env_vars)
 
     return action
 
@@ -996,7 +1039,6 @@ def main():
     init_parser.add_argument("--no-group-search", action="store_true", help="禁用分组二分，使用线性搜索")
     init_parser.add_argument("--plugin-mode", action="store_true", help="Plugin 模式（使用环境变量控制，含 OOT 搜索）")
     init_parser.add_argument("--oot-ops", help="自定义 OOT 算子列表（逗号分隔，默认使用内置列表）")
-    init_parser.add_argument("--env-config-path", default="/flagos-workspace/env_config.sh", help="env_config.sh 路径")
     init_parser.add_argument("--state-path", help="状态文件路径")
 
     # next 子命令
@@ -1040,7 +1082,6 @@ def main():
             group_search=not args.no_group_search,
             plugin_mode=args.plugin_mode,
             oot_ops=oot_ops_list,
-            env_config_path=args.env_config_path,
             state_path=args.state_path,
         )
 

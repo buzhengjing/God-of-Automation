@@ -33,13 +33,23 @@ def load_benchmark(path: str) -> Dict[str, Any]:
 
 
 def concurrency_sort_key(key: str) -> int:
-    """concurrency_64 → 64, max → 999999"""
+    """'64' → 64, 'concurrency_64' → 64, 'max' → 999999"""
+    if key.isdigit():
+        return int(key)
     m = re.search(r'(\d+)$', key)
     if m:
         return int(m.group(1))
     if 'max' in key.lower():
         return 999999
     return 0
+
+
+def get_results_data(data: Dict[str, Any]) -> Dict[str, Any]:
+    """兼容新旧两种 JSON 格式：旧格式有 results 包装，新格式直接是扁平结构"""
+    if "results" in data and isinstance(data["results"], dict):
+        return data["results"]
+    # 新格式：文件本身就是 {tc_name: {concurrency: metrics}}
+    return data
 
 
 def extract_best_throughput(tc_results: Dict[str, Any]) -> Tuple[float, float, str]:
@@ -62,7 +72,7 @@ def extract_best_throughput(tc_results: Dict[str, Any]) -> Tuple[float, float, s
         output_tp = metrics.get('Output token throughput (tok/s)', 0) or 0
         if output_tp > best_output:
             best_output = output_tp
-            best_total = metrics.get('Total Token throughput (tok/s)', 0) or 0
+            best_total = metrics.get('Total token throughput (tok/s)', 0) or 0
             best_key = key
 
     return best_output, best_total, best_key
@@ -73,7 +83,7 @@ def extract_all_concurrency_throughputs(tc_results: Dict[str, Any]) -> Dict[str,
     从测试用例结果中提取每个并发级别的吞吐量。
 
     Returns:
-        {"concurrency_1": (output_tp, total_tp), "concurrency_4": (output_tp, total_tp), ...}
+        {"1": (output_tp, total_tp), "4": (output_tp, total_tp), ...}
     """
     result = {}
     for key, metrics in tc_results.items():
@@ -83,7 +93,7 @@ def extract_all_concurrency_throughputs(tc_results: Dict[str, Any]) -> Dict[str,
             continue
 
         output_tp = metrics.get('Output token throughput (tok/s)', 0) or 0
-        total_tp = metrics.get('Total Token throughput (tok/s)', 0) or 0
+        total_tp = metrics.get('Total token throughput (tok/s)', 0) or 0
         result[key] = (output_tp, total_tp)
 
     return result
@@ -104,7 +114,7 @@ def compare_results(benchmarks: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any
     # 收集所有测试用例名称
     all_test_cases = set()
     for data in benchmarks.values():
-        results = data.get("results", {})
+        results = get_results_data(data)
         all_test_cases.update(results.keys())
 
     rows = []
@@ -114,7 +124,7 @@ def compare_results(benchmarks: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any
         bm_conc_data = {}  # {bm_name: {conc_key: (output_tp, total_tp)}}
 
         for bm_name, data in benchmarks.items():
-            tc_results = data.get("results", {}).get(tc, {})
+            tc_results = get_results_data(data).get(tc, {})
             conc_data = extract_all_concurrency_throughputs(tc_results)
             bm_conc_data[bm_name] = conc_data
             all_conc_keys.update(conc_data.keys())

@@ -7,9 +7,10 @@ model:
 
 inference:
   temperature: 0                     # Inference temperature
-  max_tokens: 2048                   # Maximum tokens per request
-  timeout: 120                       # Request timeout in seconds
+  max_tokens: 2048                   # Maximum tokens per request; thinking model 建议 16384
+  timeout: 300                       # Request timeout in seconds; thinking model 建议 1800
   max_retries: 3                     # Max retry attempts
+  top_p: 1                          # Top-p sampling
 
 evaluation:
   aime_samples: 30                   # Max AIME samples to evaluate

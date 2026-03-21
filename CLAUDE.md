@@ -99,7 +99,7 @@
 |--------|--------|------|
 | FlagGems 仓库地址 | `https://github.com/FlagOpen/FlagGems.git` | 无需用户提供 |
 | FlagTree 仓库地址 | `https://github.com/flagos-ai/FlagTree` | 无需用户提供 |
-| FlagTree 默认版本 | `0.4.0` | NVIDIA 免编译安装 |
+| FlagTree 默认版本 | 按后端自动选择（NVIDIA 默认 `0.5.0rc1`） | `install_flagtree.sh list-vendors` 查看全部 |
 | FlagTree 安装源 | `https://resource.flagos.net/repository/flagos-pypi-hosted/simple` | pip index-url |
 | 性能目标 | 80% of native | 不询问"目标是多少" |
 | pip install 模式 | `pip install .`（非 editable） | 避免 `-e .` 在容器中的问题 |
@@ -183,7 +183,6 @@ bash skills/flagos-container-preparation/tools/setup_workspace.sh $CONTAINER
 └── config/                               # 使用的配置快照
     ├── perf_config.yaml
     ├── eval_config.yaml
-    ├── env_config.sh                     # Plugin 场景
     └── context_snapshot.yaml             # 流程结束时的完整 context
 ```
 
@@ -281,7 +280,7 @@ TRACE_EOF"
 ```
 
 格式规则：
-- TPS 列使用 Total Token throughput（input + output）
+- TPS 列使用 Total token throughput（input + output）
 - Test Case 使用简写 `1k→1k` 而非 `1k_input_1k_output`
 - Ratio 列加粗显示
 - 三版列：Native / Optimized FlagGems / Full FlagGems
@@ -337,6 +336,7 @@ GPU: <gpu_count>x <gpu_type>
 4. **所有操作在 `/flagos-workspace` 目录下执行**，产出文件按类型分目录：`results/`（交付物）、`traces/`（留痕）、`logs/`（日志）、`config/`（配置快照）
 5. **context.yaml 是 Skill 间共享状态**，每个 Skill 完成后必须更新
 6. **每个 Skill 完成后必须写入对应的 trace JSON**，记录实际执行的命令、参数和关键输出
+7. **禁止添加 SKILL.md 未记录的 vLLM/sglang 启动参数**（如 `--enforce-eager`、`--disable-log-stats` 等），遇到启动问题应分析日志找根因，而非猜测参数绕过
 
 ---
 

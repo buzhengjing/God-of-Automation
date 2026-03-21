@@ -108,7 +108,9 @@ METRIC_PATTERNS = {
     'Total generated tokens': r'Total generated tokens:\s+(\d+)',
     'Request throughput (req/s)': r'Request throughput \(req/s\):\s+([\d.]+)',
     'Output token throughput (tok/s)': r'Output token throughput \(tok/s\):\s+([\d.]+)',
-    'Total Token throughput (tok/s)': r'Total Token throughput \(tok/s\):\s+([\d.]+)',
+    'Total token throughput (tok/s)': r'Total [Tt]oken throughput \(tok/s\):\s+([\d.]+)',
+    'Peak output token throughput (tok/s)': r'Peak output token throughput \(tok/s\):\s+([\d.]+)',
+    'Peak concurrent requests': r'Peak concurrent requests:\s+(\d+)',
     'Mean TTFT (ms)': r'Mean TTFT \(ms\):\s+([\d.]+)',
     'Median TTFT (ms)': r'Median TTFT \(ms\):\s+([\d.]+)',
     'P99 TTFT (ms)': r'P99 TTFT \(ms\):\s+([\d.]+)',
@@ -216,7 +218,7 @@ def run_benchmark(cmd: List[str], num_prompts: int, max_concurrency: Optional[in
 
         metrics = parse_output(full_stdout)
         throughput = metrics.get('Output token throughput (tok/s)', 'N/A')
-        total_tp = metrics.get('Total Token throughput (tok/s)', 'N/A')
+        total_tp = metrics.get('Total token throughput (tok/s)', 'N/A')
         failed = metrics.get('Failed requests', 0)
         print(f"    OK - output={throughput} tok/s, total={total_tp} tok/s, failed={failed}")
         return metrics
@@ -299,7 +301,7 @@ def run_concurrency_search(base_cmd: List[str], levels: List[int],
     for conc in levels:
         # num_prompts = concurrency，所有档统一
         metrics = run_benchmark(base_cmd, conc, conc, dry_run, timeout)
-        results[f"concurrency_{conc}"] = metrics
+        results[str(conc)] = metrics
 
         if dry_run or "error" in metrics:
             if "error" in metrics and not dry_run:
@@ -351,7 +353,7 @@ def run_concurrency_search(base_cmd: List[str], levels: List[int],
     results["_search_meta"] = {
         "best_concurrency": best_concurrency,
         "best_throughput": best_throughput,
-        "tested_levels": [l for l in levels if f"concurrency_{l}" in results],
+        "tested_levels": [l for l in levels if str(l) in results],
         "all_levels_tested": not stopped,
     }
 
@@ -376,7 +378,7 @@ def run_quick_test(base_cmd: List[str], levels: List[int],
 
     for conc in levels:
         metrics = run_benchmark(base_cmd, conc, conc, dry_run, timeout)
-        results[f"concurrency_{conc}"] = metrics
+        results[str(conc)] = metrics
 
         if dry_run or "error" in metrics:
             continue
@@ -419,7 +421,7 @@ def save_results(results: Dict[str, Any], config: Dict[str, Any],
                  output_name: Optional[str] = None,
                  output_dir: Optional[str] = None,
                  mode: Optional[str] = None) -> str:
-    """保存测试结果到 JSON 文件"""
+    """保存测试结果到 JSON 文件（扁平格式，不含 metadata 包装和 _search_meta）"""
     output_cfg = config.get("output", {})
 
     if output_dir:
@@ -435,14 +437,14 @@ def save_results(results: Dict[str, Any], config: Dict[str, Any],
     else:
         filepath = out_dir / f"benchmark_{timestamp}.json"
 
-    data = {
-        "metadata": {
-            "timestamp": datetime.now().isoformat(),
-            "mode": mode or "default",
-            "config": config if output_cfg.get("include_config_snapshot", True) else None,
-        },
-        "results": results,
-    }
+    # 扁平格式：直接输出 {tc_name: {concurrency: metrics, ...}, ...}
+    # 排除内部使用的 _search_meta
+    data = {}
+    for tc_name, tc_results in results.items():
+        if not isinstance(tc_results, dict):
+            data[tc_name] = tc_results
+            continue
+        data[tc_name] = {k: v for k, v in tc_results.items() if not k.startswith("_")}
 
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
@@ -482,9 +484,9 @@ def print_summary(results: Dict[str, Any], mode: str = "default"):
 
         if best_key:
             metrics = tc_results[best_key]
-            print(f"  Best: {best_key}")
+            print(f"  Best: concurrency={best_key}")
             print(f"  Output throughput: {metrics.get('Output token throughput (tok/s)', 'N/A')} tok/s")
-            print(f"  Total throughput:  {metrics.get('Total Token throughput (tok/s)', 'N/A')} tok/s")
+            print(f"  Total throughput:  {metrics.get('Total token throughput (tok/s)', 'N/A')} tok/s")
             print(f"  Mean TTFT:         {metrics.get('Mean TTFT (ms)', 'N/A')} ms")
             print(f"  Mean TPOT:         {metrics.get('Mean TPOT (ms)', 'N/A')} ms")
 

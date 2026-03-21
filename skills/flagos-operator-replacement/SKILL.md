@@ -36,7 +36,7 @@ provides:
 **工具脚本**（已由 setup_workspace.sh 部署到容器）:
 - `operator_optimizer.py` — 算子优化器（OOT 搜索 + 分组二分搜索、算子列表自动发现、映射表生成）
 - `operator_search.py` — 搜索编排（完整的 next→配置→重启→benchmark→update 自动循环，支持 plugin/非plugin）
-- `apply_op_config.py` — Plugin 场景：生成 env_config.sh 环境变量配置
+- `apply_op_config.py` — Plugin 场景：生成算子替换环境变量 JSON（内联前缀方式）
 
 **核心设计**：FlagGems / vllm-plugin-FL 处于持续迭代中，本 skill 不硬编码任何特定 API，而是根据 `pre-service-inspection` 探测到的 `flaggems_capabilities` 自动选择最优操作方式，逐层降级保证稳定性。
 
@@ -132,18 +132,23 @@ optimization:
 
 ## 环境变量控制方式
 
+服务启动时使用**内联环境变量**前缀方式（`VAR=val cmd`），无状态、无残留：
+
 ```bash
 # 关闭所有 FlagGems（= native 模式）
-VLLM_FL_PREFER_ENABLED=false vllm serve ...
+USE_FLAGGEMS=0 VLLM_FL_PREFER_ENABLED=false vllm serve ...
+
+# 全量启用 FlagGems
+USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true vllm serve ...
 
 # 禁用指定的 torch 底层算子
-VLLM_FL_FLAGOS_BLACKLIST="softmax,layer_norm" vllm serve ...
+USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true VLLM_FL_FLAGOS_BLACKLIST="softmax,layer_norm" vllm serve ...
 
 # 禁用指定的 OOT 高层算子
-VLLM_FL_OOT_BLACKLIST="fused_moe" vllm serve ...
+USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true VLLM_FL_OOT_BLACKLIST="fused_moe" vllm serve ...
 
 # 指定单个算子使用 vendor 实现
-VLLM_FL_PER_OP="rms_norm=vendor;attention_backend=vendor" vllm serve ...
+USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true VLLM_FL_PER_OP="rms_norm=vendor;attention_backend=vendor" vllm serve ...
 ```
 
 **重要**：环境变量设置后需重启服务才生效。重启后 FlagGems 运行时会自动重新生成算子列表 txt 文件。
@@ -162,7 +167,7 @@ VLLM_FL_PER_OP="rms_norm=vendor;attention_backend=vendor" vllm serve ...
 
 ## apply_op_config.py 使用方式
 
-Plugin 场景专用工具，生成 `env_config.sh` 环境变量配置文件：
+Plugin 场景专用工具，输出环境变量 JSON（含 `env_vars` 字典和 `env_inline` 内联前缀字符串）：
 
 ```bash
 # Native 模式
@@ -181,9 +186,17 @@ ${CMD_PREFIX} python3 /flagos-workspace/scripts/apply_op_config.py \
   --from-state /flagos-workspace/results/operator_config.json
 ```
 
-生成的 `env_config.sh` 在启动服务前 source：
+输出示例：
+```json
+{
+  "env_vars": {"USE_FLAGGEMS": "1", "VLLM_FL_PREFER_ENABLED": "true", "VLLM_FL_FLAGOS_BLACKLIST": "softmax,layer_norm"},
+  "env_inline": "USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true VLLM_FL_FLAGOS_BLACKLIST=softmax,layer_norm"
+}
+```
+
+在启动命令前使用内联前缀：
 ```bash
-source /flagos-workspace/env_config.sh && vllm serve ...
+USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true VLLM_FL_FLAGOS_BLACKLIST=softmax,layer_norm vllm serve ...
 ```
 
 ---
@@ -361,16 +374,16 @@ print('配置已写入:', config_path)
 
 ## 步骤 4 — Plugin 场景：通过环境变量同步禁用
 
-如果 `vllm_plugin_installed=true`，使用环境变量控制而不是修改代码：
+如果 `vllm_plugin_installed=true`，使用内联环境变量控制而不是修改代码：
 
 ```bash
-# 生成 env_config.sh 禁用指定算子
+# 生成环境变量 JSON
 ${CMD_PREFIX} python3 /flagos-workspace/scripts/apply_op_config.py --mode custom \
   --oot-blacklist "fused_moe" \
   --flagos-blacklist "softmax"
 
-# 重启服务前 source 配置
-source /flagos-workspace/env_config.sh && vllm serve ...
+# 在启动命令前使用内联环境变量
+USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true VLLM_FL_OOT_BLACKLIST=fused_moe VLLM_FL_FLAGOS_BLACKLIST=softmax vllm serve ...
 ```
 
 如果 `vllm_plugin_installed=false`，无需此步骤（Layer 1-4 已直接控制 flag_gems 层）。
@@ -392,7 +405,7 @@ source /flagos-workspace/env_config.sh && vllm serve ...
 ```
 阶段 1: OOT 层逐个排查（≤5 轮，仅 plugin 场景）
   for each oot_op in [silu_and_mul, rms_norm, rotary_embedding, fused_moe, attention_backend]:
-    1. 设置 VLLM_FL_OOT_BLACKLIST=oot_op（生成 env_config.sh）
+    1. 设置 VLLM_FL_OOT_BLACKLIST=oot_op（内联环境变量）
     2. 重启服务 + quick benchmark
     3. 读取运行时 txt 文件验证算子变化
     4. if 禁用后性能显著提升 → 加入 oot_blacklist
@@ -491,7 +504,6 @@ ${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_search.py run \
   --perf-config /flagos-workspace/perf/config/perf_config.yaml \
   --service-startup-cmd "bash /flagos-workspace/scripts/start_service.sh" \
   --plugin-mode \
-  --env-config-path /flagos-workspace/env_config.sh \
   --max-rounds 25
 ```
 
@@ -516,11 +528,11 @@ ${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_search.py run \
 1. 获取下一步操作:
    ${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py next
 
-2. 根据返回的 action 和 env_vars，应用算子配置:
-   - Plugin: 调用 apply_op_config.py 生成 env_config.sh
+2. 根据返回的 action 和 env_vars/env_inline，应用算子配置:
+   - Plugin: 使用 env_inline 内联前缀启动
    - 非 plugin: 通过 Layer 1-4 策略
 
-3. 清除 Triton cache + 重启服务（plugin 场景 source env_config.sh）
+3. 清除 Triton cache + 重启服务（plugin 场景使用内联 env vars）
 
 4. 运行快速 benchmark:
    ${CMD_PREFIX} python3 /flagos-workspace/scripts/benchmark_runner.py \
@@ -572,7 +584,7 @@ operator_replacement:
   replacement_mode: "plugin_env"      # 或 yaml_config / only_enable / source_edit
   final_gems_txt: "/path/to/gems.txt"
   config_file_path: "/path/to/enable_configs.yaml"
-  env_config_path: "/flagos-workspace/env_config.sh"
+  env_vars: {}                        # Plugin 模式下的当前环境变量快照
   available_ops: [...]
   rollback_info: "rm /path/to/enable_configs.yaml"
 
@@ -629,7 +641,6 @@ optimization:
 - **累计替换报告已输出给用户**
 - operator_config.json 已保存
 - context.yaml 已更新
-- Plugin 场景的 env_config.sh 同时保存到 `config/env_config.sh`
 - `traces/11_operator_replacement.json` 已写入（记录搜索策略、每轮测试命令、禁用算子列表、最终性能比）
 
 ---

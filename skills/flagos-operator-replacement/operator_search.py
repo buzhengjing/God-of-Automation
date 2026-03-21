@@ -125,12 +125,12 @@ def apply_operator_config(action: Dict[str, Any],
                           apply_config_script: str = DEFAULT_APPLY_CONFIG_SCRIPT,
                           plugin_mode: bool = False,
                           capabilities: Optional[List[str]] = None,
-                          gems_txt_path: Optional[str] = None) -> bool:
+                          gems_txt_path: Optional[str] = None) -> Any:
     """
     应用算子配置。
 
-    Plugin 场景：调用 apply_op_config.py 生成 env_config.sh
-    非 plugin 场景：通过 Layer 1-4 策略控制
+    Plugin 场景：从 action 的 env_vars 构建内联环境变量字符串，返回 env_inline 字符串
+    非 plugin 场景：通过 Layer 1-4 策略控制，返回 True/False
     """
     if plugin_mode:
         return _apply_plugin_config(action, apply_config_script)
@@ -139,41 +139,27 @@ def apply_operator_config(action: Dict[str, Any],
 
 
 def _apply_plugin_config(action: Dict[str, Any],
-                         apply_config_script: str) -> bool:
-    """Plugin 场景：生成 env_config.sh"""
+                         apply_config_script: str) -> Optional[str]:
+    """Plugin 场景：从 action 的 env_vars 构建内联环境变量字符串"""
     env_vars = action.get("env_vars", {})
 
     if not env_vars:
-        print("  WARN: action 无 env_vars 信息，使用 full 模式")
-        result = run_cmd(f"python {apply_config_script} --mode full", check=False)
-        return result.returncode == 0
+        print("  WARN: action 无 env_vars 信息，使用 full 模式默认值")
+        env_vars = {"USE_FLAGGEMS": "1", "VLLM_FL_PREFER_ENABLED": "true"}
 
-    # 根据 action 类型构建 apply_op_config.py 命令
-    action_type = action.get("action", "")
+    # 构建内联字符串
+    env_inline = action.get("env_inline", "")
+    if not env_inline:
+        parts = []
+        for k, v in env_vars.items():
+            if " " in v or "'" in v:
+                parts.append(f"{k}='{v}'")
+            else:
+                parts.append(f"{k}={v}")
+        env_inline = " ".join(parts)
 
-    if "oot" in action_type:
-        oot_bl = env_vars.get("VLLM_FL_OOT_BLACKLIST", "")
-        flagos_bl = env_vars.get("VLLM_FL_FLAGOS_BLACKLIST", "")
-        cmd_parts = [f"python {apply_config_script} --mode custom"]
-        if oot_bl:
-            cmd_parts.append(f'--oot-blacklist "{oot_bl}"')
-        if flagos_bl:
-            cmd_parts.append(f'--flagos-blacklist "{flagos_bl}"')
-        cmd = " ".join(cmd_parts)
-    else:
-        # group / linear 搜索
-        oot_bl = env_vars.get("VLLM_FL_OOT_BLACKLIST", "")
-        flagos_bl = env_vars.get("VLLM_FL_FLAGOS_BLACKLIST", "")
-        cmd_parts = [f"python {apply_config_script} --mode custom"]
-        if oot_bl:
-            cmd_parts.append(f'--oot-blacklist "{oot_bl}"')
-        if flagos_bl:
-            cmd_parts.append(f'--flagos-blacklist "{flagos_bl}"')
-        cmd = " ".join(cmd_parts)
-
-    print(f"  [Plugin] 生成 env_config.sh")
-    result = run_cmd(cmd, check=False)
-    return result.returncode == 0
+    print(f"  [Plugin] 内联环境变量: {env_inline}")
+    return env_inline
 
 
 def _apply_non_plugin_config(action: Dict[str, Any],
@@ -260,7 +246,7 @@ def _apply_txt_fallback(enabled_ops: List[str], gems_txt_path: Optional[str]) ->
 
 def restart_service(stop_cmd: str, startup_cmd: str,
                     wait_script: str, wait_timeout: int = SERVICE_WAIT_TIMEOUT,
-                    env_config_path: Optional[str] = None) -> bool:
+                    env_inline: Optional[str] = None) -> bool:
     """重启服务：停止 → 启动 → 等待就绪"""
     print("\n[重启服务]")
 
@@ -274,10 +260,10 @@ def restart_service(stop_cmd: str, startup_cmd: str,
     run_cmd(stop_cmd, check=False)
     time.sleep(5)
 
-    # 启动（plugin 场景带环境变量）
-    if env_config_path:
-        actual_cmd = f"source {env_config_path} && {startup_cmd}"
-        print(f"  启动服务（带 env_config）...")
+    # 启动（plugin 场景使用内联环境变量前缀）
+    if env_inline:
+        actual_cmd = f"{env_inline} {startup_cmd}"
+        print(f"  启动服务（内联 env vars）...")
     else:
         actual_cmd = startup_cmd
         print("  启动服务...")
@@ -343,15 +329,29 @@ def run_benchmark_quick(perf_config: str, benchmark_script: str,
     output_path = f"{output_dir}/{output_name}.json"
     try:
         data = load_json(output_path)
-        results = data.get("results", {})
 
-        # 提取吞吐量
+        # 兼容新旧格式：旧格式有 results 包装，新格式直接是扁平结构
+        results = data.get("results", data) if isinstance(data, dict) else data
+
+        # 提取吞吐量：从每个 test case 的并发结果中找最大 output throughput
         throughputs = {}
         for tc_name, tc_results in results.items():
             if not isinstance(tc_results, dict):
                 continue
+            # 新格式：无 _search_meta，直接遍历并发结果取最大值
+            # 旧格式兼容：如果有 _search_meta 则优先使用
             meta = tc_results.get("_search_meta", {})
             best_tp = meta.get("best_throughput", 0)
+            if best_tp > 0:
+                throughputs[tc_name] = best_tp
+                continue
+            # 新格式：从并发结果中提取最优
+            for key, metrics in tc_results.items():
+                if key.startswith("_") or not isinstance(metrics, dict) or "error" in metrics:
+                    continue
+                tp = metrics.get('Output token throughput (tok/s)', 0) or 0
+                if tp > best_tp:
+                    best_tp = tp
             if best_tp > 0:
                 throughputs[tc_name] = best_tp
 
@@ -392,7 +392,6 @@ def run_search_step(state_path: str, perf_config: str,
                     gems_txt_path: Optional[str] = None,
                     plugin_mode: bool = False,
                     capabilities: Optional[List[str]] = None,
-                    env_config_path: Optional[str] = None,
                     optimizer_script: str = DEFAULT_OPTIMIZER_SCRIPT,
                     benchmark_script: str = DEFAULT_BENCHMARK_SCRIPT,
                     toggle_script: str = DEFAULT_TOGGLE_SCRIPT,
@@ -415,19 +414,26 @@ def run_search_step(state_path: str, perf_config: str,
     print(f"\n操作: {action.get('message', action_type)}")
 
     # 2. 应用算子配置
-    if not apply_operator_config(
+    config_result = apply_operator_config(
         action,
         apply_config_script=apply_config_script,
         plugin_mode=plugin_mode,
         capabilities=capabilities,
         gems_txt_path=gems_txt_path,
-    ):
-        return {"action": "error", "message": "算子配置应用失败"}
+    )
+    # plugin 模式返回 env_inline 字符串或 None，非 plugin 返回 True/False
+    if plugin_mode:
+        env_inline = config_result if isinstance(config_result, str) else None
+        if not env_inline:
+            return {"action": "error", "message": "算子配置应用失败（无 env_inline）"}
+    else:
+        if not config_result:
+            return {"action": "error", "message": "算子配置应用失败"}
+        env_inline = None
 
     # 3. 重启服务
-    effective_env_config = env_config_path if plugin_mode else None
     if not restart_service(SERVICE_STOP_CMD, service_startup_cmd, wait_script,
-                           env_config_path=effective_env_config):
+                           env_inline=env_inline):
         return {"action": "error", "message": "服务重启失败"}
 
     # 3.5. 重启后验证算子变化
@@ -475,7 +481,6 @@ def run_full_search(state_path: str, perf_config: str,
                     gems_txt_path: Optional[str] = None,
                     plugin_mode: bool = False,
                     capabilities: Optional[List[str]] = None,
-                    env_config_path: Optional[str] = None,
                     **kwargs) -> Dict[str, Any]:
     """运行完整搜索循环"""
     print(f"\n{'#' * 60}")
@@ -497,7 +502,6 @@ def run_full_search(state_path: str, perf_config: str,
             gems_txt_path=gems_txt_path,
             plugin_mode=plugin_mode,
             capabilities=capabilities,
-            env_config_path=env_config_path,
             **kwargs
         )
 
@@ -559,8 +563,6 @@ def main():
     common.add_argument("--gems-txt-path", help="gems.txt 路径（非 plugin 兜底写入）")
     common.add_argument("--plugin-mode", action="store_true", help="Plugin 模式（环境变量控制）")
     common.add_argument("--capabilities", help="flaggems_capabilities（逗号分隔，非 plugin 场景）")
-    common.add_argument("--env-config-path", default="/flagos-workspace/env_config.sh",
-                        help="env_config.sh 路径（plugin 场景）")
     common.add_argument("--optimizer-script", default=DEFAULT_OPTIMIZER_SCRIPT)
     common.add_argument("--benchmark-script", default=DEFAULT_BENCHMARK_SCRIPT)
     common.add_argument("--toggle-script", default=DEFAULT_TOGGLE_SCRIPT)
@@ -589,7 +591,6 @@ def main():
             gems_txt_path=args.gems_txt_path,
             plugin_mode=args.plugin_mode,
             capabilities=caps,
-            env_config_path=args.env_config_path,
             optimizer_script=args.optimizer_script,
             benchmark_script=args.benchmark_script,
             toggle_script=args.toggle_script,
@@ -606,7 +607,6 @@ def main():
             gems_txt_path=args.gems_txt_path,
             plugin_mode=args.plugin_mode,
             capabilities=caps,
-            env_config_path=args.env_config_path,
             optimizer_script=args.optimizer_script,
             benchmark_script=args.benchmark_script,
             toggle_script=args.toggle_script,
