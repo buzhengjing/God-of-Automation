@@ -99,7 +99,7 @@ docker run -d --name ${CONTAINER_NAME} \
     -v ${MODEL_PATH}:${CONTAINER_MODEL_PATH} \
     -v ${WORKSPACE_PATH:-/data/flagos-workspace}:/flagos-workspace \
     -e PYTORCH_NPU_ALLOC_CONF=max_split_size_mb:256 \
-    ${IMAGE} bash
+    ${IMAGE} sleep infinity
 ```
 
 #### 模板 C：Moore Threads（摩尔线程）
@@ -128,7 +128,7 @@ docker run -d --name ${CONTAINER_NAME} \
     --device=/dev/dri --device=/dev/mxcd \
     -v ${MODEL_PATH}:${CONTAINER_MODEL_PATH} \
     -v ${WORKSPACE_PATH:-/data/flagos-workspace}:/flagos-workspace \
-    ${IMAGE} bash
+    ${IMAGE} sleep infinity
 ```
 
 #### 模板 E：Cambricon（寒武纪）
@@ -140,7 +140,7 @@ docker run -d --name ${CONTAINER_NAME} \
     -v ${MODEL_PATH}:${CONTAINER_MODEL_PATH} \
     -v ${WORKSPACE_PATH:-/data/flagos-workspace}:/flagos-workspace \
     -v /data:/data \
-    ${IMAGE} bash
+    ${IMAGE} sleep infinity
 ```
 
 **模板规则**：

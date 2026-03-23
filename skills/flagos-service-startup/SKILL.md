@@ -41,6 +41,7 @@ provides:
 - **flagos** — 启用全量 FlagGems。
 
 **工具脚本**（已由 setup_workspace.sh 部署到容器）:
+- `calc_tp_size.py` — TP 自动推算（根据模型大小和 GPU 显存）
 - `toggle_flaggems.py` — FlagGems 开关切换（替代 sed）
 - `wait_for_service.sh` — 服务就绪检测（指数退避）
 - `install_flagtree.sh` — FlagTree 安装/卸载/验证
@@ -152,6 +153,33 @@ docker exec $CONTAINER python3 /flagos-workspace/scripts/toggle_flaggems.py --ac
 **如果 integration_type 为 env_var**，则通过环境变量控制（不修改代码）：
 - 读取 `flaggems_control.enable_method` / `disable_method`，在启动命令前加对应环境变量。
 
+## 步骤 2.5 — TP 自动推算
+
+在启动服务前，自动推算最小可用 `--tensor-parallel-size`：
+
+```bash
+docker exec $CONTAINER python3 /flagos-workspace/scripts/calc_tp_size.py --model-path $MODEL_PATH --json
+```
+
+输出示例：
+```json
+{
+  "recommended_tp": 1,
+  "gpu_count": 8,
+  "gpu_memory_gb": 80.0,
+  "model_size_gb": 15.2,
+  "estimated_required_gb": 18.2,
+  "reason": "模型 15.2GB，单卡 80GB 显存充足，推荐 TP=1"
+}
+```
+
+**使用规则**：
+- 读取 `recommended_tp` 作为 `${TP_SIZE}` 的值
+- 如果脚本执行失败（退出码非 0），fallback 到 GPU 总数
+- 如果推荐 TP 启动后 OOM，自动翻倍重试（TP×2），直到 GPU 总数
+
+将推荐值写入 context.yaml 的 `runtime.tp_size` 和 `runtime.tp_reason`。
+
 ## 步骤 3 — 启动服务
 
 **非 plugin 场景**：
@@ -211,7 +239,7 @@ docker exec -d $CONTAINER bash -c "cd /flagos-workspace && PATH=/opt/conda/bin:\
 **模板使用规则**：
 - 具体参数值从容器 README / 用户输入 / context.yaml 获取
 - `--served-model-name` 默认使用模型目录名
-- `--tensor-parallel-size` 默认等于 GPU 数量
+- `--tensor-parallel-size` 默认使用 `calc_tp_size.py` 的推荐值（基于模型大小和单卡显存自动推算），fallback 到 GPU 总数
 - 业务环境变量（`VLLM_USE_MODELSCOPE` 等）按需在 docker exec 中追加，不写入模板
 
 ### max_model_len 决策规则
@@ -397,7 +425,7 @@ docker exec $CONTAINER bash /flagos-workspace/scripts/install_flagtree.sh uninst
 
 | 症状 | 可能原因 | 解决方案 |
 |------|----------|----------|
-| 进程启动后立即退出 | GPU 显存不足 | 减少 tensor-parallel-size 或降低 max-model-len |
+| 进程启动后立即退出 | GPU 显存不足 | 自动将 TP 翻倍重试（TP×2），或降低 max-model-len |
 | API 无响应 | 端口被占用 | 检查 `lsof -i:$PORT` |
 | FlagGems 未生效 | toggle_flaggems.py 未正确切换 | 运行 `--action status` 检查 |
 | gems.txt 未生成 | FlagGems 未启用 | 确认 toggle 状态 |

@@ -52,6 +52,15 @@ provides:
 
 **只能通过 `benchmark_runner.py` 执行性能测试**，禁止直接运行 `vllm bench serve`。
 
+**启动前互斥检查**：性能测试启动前，必须确认没有正在运行的精度评测进程。并发执行会互相抢占 GPU 资源，导致结果不可信。
+
+```bash
+# 检查是否有评测进程在运行（eval_aime.py / eval_erqa.py / eval_monitor.py）
+docker exec $CONTAINER bash -c "pgrep -f 'eval_aime\|eval_erqa\|eval_monitor' && echo 'BLOCKED: 评测进程运行中，等待结束' && exit 1 || echo 'OK: 无评测进程'"
+```
+
+如果检测到评测进程，**必须等待其结束后再启动性能测试**，禁止强杀评测进程。
+
 **策略触发规则**：
 - 用户说"快速测试"/"走通流程"/"smoke test"/"验证流程"→ `--strategy quick`
 - 用户说"完整测试"/"全量"/"所有并发"→ `--strategy comprehensive`

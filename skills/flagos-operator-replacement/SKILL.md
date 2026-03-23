@@ -260,6 +260,108 @@ ${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py mapping \
 
 ---
 
+# 快速诊断（搜索前置步骤）
+
+**在进入搜索循环之前，先用 `diagnose_ops.py` 快速定位问题算子**，避免盲搜。
+
+**工具脚本**（已由 setup_workspace.sh 部署到容器）:
+- `diagnose_ops.py` — 三场景快速定位（崩溃日志解析、精度分组、性能热点预扫描）
+
+## 场景 1：启动崩溃 → 日志自动解析（O(1) 定位）
+
+FlagOS 模式启动失败时，**先解析崩溃日志再决定下一步**，不要直接进搜索：
+
+```bash
+${CMD_PREFIX} python3 /flagos-workspace/scripts/diagnose_ops.py crash-log \
+  --log-path /flagos-workspace/logs/startup_flagos.log \
+  --ops-file /flagos-workspace/results/ops_list.json \
+  --json
+```
+
+输出示例：
+```json
+{
+  "crashed_ops": ["softmax"],
+  "evidence": [{"op": "softmax", "line_start": 142, "error_type": "sm_unsupported", "error_message": "CUDA error: no kernel image..."}],
+  "suggestion": "建议禁用以下算子后重启: softmax"
+}
+```
+
+**决策逻辑**：
+- `crashed_ops` 非空 → 直接禁用这些算子 → 重启服务 → 不进搜索
+- `crashed_ops` 为空但有 evidence → 人工查看日志
+- 无 evidence → 非算子问题，检查环境配置
+
+## 场景 2：精度不达标 → 按组启用测试（≤5 轮定位）
+
+精度评测不通过时，**按功能组逐组启用测试**，快速缩小范围：
+
+```bash
+${CMD_PREFIX} python3 /flagos-workspace/scripts/diagnose_ops.py accuracy-groups \
+  --ops-file /flagos-workspace/results/ops_list.json \
+  --plugin-mode \
+  --json
+```
+
+输出每组的 test_env 配置（含 `env_inline`），测试流程：
+
+```
+1. baseline: 全禁用（USE_FLAGGEMS=0）→ quick eval → 确认精度正常
+2. 逐组启用: 用每组的 env_inline 启动服务 → quick eval
+3. 哪组启用后精度下降 → 该组有问题
+4. 问题组内逐个算子排查（最多 N 个算子，N 轮）
+```
+
+**预期效率**：5 组 + 问题组内 ~8 个 = ~13 轮（vs 盲搜 38 个算子）
+
+## 场景 3：性能不达标 → Profiling 预扫描（缩小搜索范围）
+
+性能低于 80% 时，**先做 profiling 看哪些算子最慢**，再针对性搜索：
+
+```bash
+# 方式 A：配置 profiler 目录后采集
+# 启动服务时加 VLLM_TORCH_PROFILER_DIR=/flagos-workspace/traces/profiler
+${CMD_PREFIX} python3 /flagos-workspace/scripts/diagnose_ops.py profile \
+  --profiler-dir /flagos-workspace/traces/profiler \
+  --port $PORT --model-name $MODEL_NAME --json
+
+# 方式 B：利用 vLLM 的 /start_profile API 自动采集
+${CMD_PREFIX} python3 /flagos-workspace/scripts/diagnose_ops.py profile \
+  --port $PORT --model-name $MODEL_NAME --json
+```
+
+输出示例：
+```json
+{
+  "method": "torch_profiler",
+  "hotspots": [
+    {"op": "softmax", "avg_ms": 12.3, "calls": 1280, "total_ms": 15744},
+    {"op": "rms_norm", "avg_ms": 3.1, "calls": 640, "total_ms": 1984}
+  ],
+  "suggestion": "性能热点 Top3: softmax(15744ms, 1280次); rms_norm(1984ms, 640次)。建议优先搜索这些算子"
+}
+```
+
+**决策逻辑**：
+- 有热点 → 只搜 hotspot 算子，跳过分组二分的大部分轮次
+- 无法采集 profiler → 按 setup_instructions 配置后重试，或 fallback 到分组二分搜索
+
+## 诊断与搜索的衔接
+
+```
+服务启动 flagos 模式
+    │
+    ├── 启动失败 → crash-log 解析 → 禁用问题算子 → 重启
+    │
+    ├── 启动成功 → 精度评测
+    │       ├── 不达标 → accuracy-groups 分组定位 → 禁用问题组/算子
+    │       └── 通过 → 性能测试
+    │               ├── 达标 → 完成
+    │               └── 不达标 → profile 预扫描 → 缩小搜索空间 → 分组二分
+```
+
+---
+
 # 两种触发方式
 
 | 触发方式 | 场景 | 模式 |

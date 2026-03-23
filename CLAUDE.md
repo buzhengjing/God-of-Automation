@@ -136,6 +136,7 @@ bash skills/flagos-container-preparation/tools/setup_workspace.sh $CONTAINER
 - `performance_compare.py` — 性能对比
 - `operator_optimizer.py` — 算子优化
 - `operator_search.py` — 算子搜索编排
+- `diagnose_ops.py` — 算子快速诊断（崩溃日志解析、精度分组测试、性能热点预扫描）
 - `eval_monitor.py` — 评测监控
 - `install_flagtree.sh` — FlagTree 安装/卸载/验证
 
@@ -337,6 +338,7 @@ GPU: <gpu_count>x <gpu_type>
 5. **context.yaml 是 Skill 间共享状态**，每个 Skill 完成后必须更新
 6. **每个 Skill 完成后必须写入对应的 trace JSON**，记录实际执行的命令、参数和关键输出
 7. **禁止添加 SKILL.md 未记录的 vLLM/sglang 启动参数**（如 `--enforce-eager`、`--disable-log-stats` 等），遇到启动问题应分析日志找根因，而非猜测参数绕过
+8. **精度评测和性能测试严禁同时进行**。必须等一个完全结束后再启动另一个。并发执行会互相抢占 GPU 资源，导致两边结果都不可信。启动前必须检查是否有正在运行的评测/测试进程
 
 ---
 

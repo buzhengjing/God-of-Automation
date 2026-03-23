@@ -50,6 +50,19 @@ provides:
 
 ---
 
+## 强制约束
+
+**启动前互斥检查**：精度评测启动前，必须确认没有正在运行的性能测试进程。并发执行会互相抢占 GPU 资源，导致结果不可信。
+
+```bash
+# 检查是否有性能测试进程在运行（benchmark_runner.py / vllm bench）
+docker exec $CONTAINER bash -c "pgrep -f 'benchmark_runner\|vllm.*bench' && echo 'BLOCKED: 性能测试运行中，等待结束' && exit 1 || echo 'OK: 无性能测试进程'"
+```
+
+如果检测到性能测试进程，**必须等待其结束后再启动精度评测**，禁止强杀测试进程。
+
+---
+
 # 总体流程图
 
 ```

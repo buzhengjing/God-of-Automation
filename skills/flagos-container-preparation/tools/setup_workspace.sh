@@ -100,6 +100,14 @@ if [ -f "${PROJECT_ROOT}/skills/flagos-operator-replacement/tools/apply_op_confi
     echo "  ✓ apply_op_config.py"
 fi
 
+# 算子快速诊断
+if [ -f "${PROJECT_ROOT}/skills/flagos-operator-replacement/tools/diagnose_ops.py" ]; then
+    docker cp "${PROJECT_ROOT}/skills/flagos-operator-replacement/tools/diagnose_ops.py" \
+        "${CONTAINER}:/flagos-workspace/scripts/diagnose_ops.py"
+    SCRIPTS_COPIED=$((SCRIPTS_COPIED + 1))
+    echo "  ✓ diagnose_ops.py"
+fi
+
 # 性能测试配置
 if [ -d "${PROJECT_ROOT}/skills/flagos-performance-testing/config" ]; then
     docker cp "${PROJECT_ROOT}/skills/flagos-performance-testing/config/." \
@@ -115,6 +123,14 @@ for eval_script in "${PROJECT_ROOT}"/skills/flagos-eval-correctness/tools/eval_*
         SCRIPTS_COPIED=$((SCRIPTS_COPIED + 1))
     fi
 done
+
+# TP 推算脚本
+if [ -f "${PROJECT_ROOT}/skills/flagos-service-startup/tools/calc_tp_size.py" ]; then
+    docker cp "${PROJECT_ROOT}/skills/flagos-service-startup/tools/calc_tp_size.py" \
+        "${CONTAINER}:/flagos-workspace/scripts/calc_tp_size.py"
+    SCRIPTS_COPIED=$((SCRIPTS_COPIED + 1))
+    echo "  ✓ calc_tp_size.py"
+fi
 
 # FlagTree 安装脚本
 if [ -f "${PROJECT_ROOT}/skills/flagos-container-preparation/tools/install_flagtree.sh" ]; then

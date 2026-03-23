@@ -160,6 +160,8 @@ flaggems_control:
 runtime:
   framework: ""           # 框架: vllm|sglang
   flaggems_enabled: false # 是否启用 FlagGems
+  tp_size: 0              # tensor-parallel-size（由 calc_tp_size.py 推算）
+  tp_reason: ""           # TP 推算原因
 
 # ============================================================================
 # 服务信息 (由 service-startup 写入)

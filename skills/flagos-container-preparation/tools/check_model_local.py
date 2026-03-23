@@ -25,6 +25,9 @@ SKIP_DIRS = {".git", "__pycache__", "node_modules", "venv", ".venv", ".cache", "
 # 权重文件排除模式
 EXCLUDE_BIN = re.compile(r"^(optimizer|training_args|scheduler)", re.IGNORECASE)
 
+# 单个权重文件最小合理大小（1 MB），低于此阈值视为下载中断的残文件
+MIN_WEIGHT_FILE_SIZE = 1 * 1024 * 1024
+
 
 def parse_model_identifier(model_input: str) -> dict:
     """从用户输入解析模型名称和组织信息。"""
@@ -139,6 +142,57 @@ def search_model_dirs(model_name: str, search_paths: list, max_depth: int) -> li
     return exact_matches, contain_matches, config_matches
 
 
+def check_index_completeness(dir_path: str, weight_files: list, weight_format: str) -> dict:
+    """对比 index.json 分片清单，检查权重文件是否齐全。
+
+    返回 {"complete": bool, "missing": [...], "index_file": str or None}
+    """
+    # 确定 index 文件名
+    if weight_format == "safetensors":
+        index_name = "model.safetensors.index.json"
+    elif weight_format == "pytorch_bin":
+        index_name = "pytorch_model.bin.index.json"
+    else:
+        return {"complete": True, "missing": [], "index_file": None}
+
+    index_path = os.path.join(dir_path, index_name)
+    if not os.path.isfile(index_path):
+        # 无 index 文件说明是单文件模型或非分片格式，跳过检查
+        return {"complete": True, "missing": [], "index_file": None}
+
+    try:
+        with open(index_path, "r", encoding="utf-8") as f:
+            index_data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {"complete": True, "missing": [], "index_file": index_name}
+
+    # weight_map 的值是分片文件名，取唯一集合
+    weight_map = index_data.get("weight_map", {})
+    expected_files = set(weight_map.values())
+    actual_files = set(weight_files)
+    missing = sorted(expected_files - actual_files)
+
+    return {
+        "complete": len(missing) == 0,
+        "missing": missing,
+        "index_file": index_name,
+    }
+
+
+def check_truncated_files(dir_path: str, weight_files: list) -> list:
+    """检查是否有疑似下载中断的残文件（< MIN_WEIGHT_FILE_SIZE）。"""
+    truncated = []
+    for fname in weight_files:
+        full_path = os.path.join(dir_path, fname)
+        try:
+            size = os.path.getsize(full_path)
+            if size < MIN_WEIGHT_FILE_SIZE:
+                truncated.append({"file": fname, "size_bytes": size})
+        except OSError:
+            truncated.append({"file": fname, "size_bytes": -1})
+    return truncated
+
+
 def validate_model_dir(dir_path: str) -> dict:
     """校验目录是否包含有效模型权重。"""
     result = {
@@ -149,6 +203,8 @@ def validate_model_dir(dir_path: str) -> dict:
         "weight_count": 0,
         "total_size_gb": 0.0,
         "tokenizer": False,
+        "completeness": {},
+        "truncated_files": [],
     }
 
     try:
@@ -201,8 +257,21 @@ def validate_model_dir(dir_path: str) -> dict:
     result["weight_count"] = len(result["weight_files"])
     result["total_size_gb"] = round(total_size / (1024 ** 3), 2)
 
-    # valid = config.json 存在 + 至少一个权重文件
-    result["valid"] = result["config_json"] and result["weight_count"] > 0
+    # 完整性校验：对比 index.json 分片清单
+    result["completeness"] = check_index_completeness(
+        dir_path, result["weight_files"], result["weight_format"]
+    )
+
+    # 残文件检测：单文件 < 1MB
+    result["truncated_files"] = check_truncated_files(dir_path, result["weight_files"])
+
+    # valid = config.json + 至少一个权重文件 + 分片齐全 + 无残文件
+    result["valid"] = (
+        result["config_json"]
+        and result["weight_count"] > 0
+        and result["completeness"]["complete"]
+        and len(result["truncated_files"]) == 0
+    )
 
     return result
 
@@ -290,9 +359,20 @@ def main():
         else:
             print("\n✗ No valid model weights found.")
             if candidates:
-                print("  Partial matches (missing config.json or weight files):")
+                print("  Partial matches:")
                 for c in candidates[:5]:
-                    print(f"    {c['path']} (config: {c['config_json']}, weights: {c['weight_count']})")
+                    issues = []
+                    if not c["config_json"]:
+                        issues.append("missing config.json")
+                    if c["weight_count"] == 0:
+                        issues.append("no weight files")
+                    if not c["completeness"].get("complete", True):
+                        missing = c["completeness"]["missing"]
+                        issues.append(f"missing {len(missing)} shard(s): {', '.join(missing[:3])}")
+                    if c["truncated_files"]:
+                        names = [t["file"] for t in c["truncated_files"]]
+                        issues.append(f"truncated: {', '.join(names[:3])}")
+                    print(f"    {c['path']} — {'; '.join(issues) or 'unknown'}")
 
     sys.exit(0 if best_match else 1)
 
