@@ -160,10 +160,9 @@ eval:
 
 ---
 
-# 本地评测工具
+# 本地评测
 
-> 本地评测（含 quick 模式）已迁移到 `flagos-eval-comprehensive` Skill。
-> 本 Skill 的 `tools/` 目录下仍保留 `eval_aime.py` 和 `eval_erqa.py` 脚本作为独立工具，但迁移流程中不再直接使用。
+> 本地评测（含 quick 模式）已迁移到 `flagos-eval-comprehensive` Skill，本 Skill 不再包含本地评测脚本和数据集。
 
 ---
 
