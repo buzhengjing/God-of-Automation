@@ -1,7 +1,7 @@
 ---
 name: flagos-operator-replacement
-description: 算子替换与优化工具，支持被动排除（评测报错）和主动两阶段搜索优化（OOT→group），适配 plugin 环境变量控制和非 plugin Layer 1-4 分层降级，算子列表自动发现，全自动搜索编排
-version: 5.0.0
+description: 算子替换与优化工具，支持被动排除（评测报错）和主动两阶段搜索优化（OOT→group），适配 plugin 环境变量控制和非 plugin Layer 1-4 分层降级，算子列表自动发现，全自动搜索编排，反向二分搜索 + 框架验证 + 排序校验
+version: 6.0.0
 license: internal
 triggers:
   - operator replacement
@@ -666,6 +666,75 @@ Plugin 场景需同步修改 dispatch 层。
 ### 步骤 O7 — 验证最终性能
 
 重启服务后运行完整 benchmark 验证优化后性能。
+
+## 反向二分搜索（--reverse）
+
+当全量 FlagGems 性能极低（如 <60%）时，**推荐使用反向搜索**。
+
+**正向搜索**（默认）：从全量启用出发，逐组禁用 → 定位性能拖慢的组 → 组内二分禁用
+**反向搜索**（--reverse）：从全禁用出发（= Native 性能），逐组启用 → 定位引入性能下降的组 → 组内二分启用
+
+### 适用场景
+
+| 场景 | 推荐策略 | 原因 |
+|------|----------|------|
+| 性能 60-80% | 正向搜索 | 少量算子拖慢，逐步禁用高效 |
+| 性能 <60% 或大量注册算子 | **反向搜索** | dispatch 注册干扰严重，正向每轮变化小定位困难 |
+| 运行时执行算子远少于注册算子 | **反向搜索** | 问题来自注册开销而非执行慢 |
+
+### 使用方式
+
+初始化时加 `--reverse`：
+
+```bash
+${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py init \
+  --ops-file /flagos-workspace/results/ops_list.json \
+  --native-throughput <native_perf.output_throughput> \
+  --target-ratio 0.8 \
+  --plugin-mode \
+  --reverse
+```
+
+搜索编排无需改动，`operator_search.py` 自动读取状态中的 `search_direction` 字段。
+
+### 反向搜索流程
+
+```
+1. 初始化: enabled=[], disabled=全部算子 (性能 ≈ Native)
+2. 逐组启用: 将 compute 组全部启用 → benchmark
+   ├── 达标(≥80%) → 该组安全，保留启用，测试下一组
+   └── 不达标 → 该组有问题算子 → 整组回退 → 组内二分
+3. 组内二分: 启用前半 → benchmark
+   ├── 达标 → 前半安全保留，继续测试后半
+   └── 不达标 → 前半有问题 → 回退前半 → 在前半内继续二分
+4. 定位到单个问题算子 → 保持禁用，组内其余启用
+```
+
+### MetaX 实战参考
+
+MetaX C500 + Qwen3-8B：309 个注册算子仅 26 个运行时执行，全量 FlagGems 性能仅 60%。反向搜索 11 轮定位到 `mm_out` 单个问题算子（未被调用但 dispatch 注册干扰原生 mm），Optimized 平均 96.1%。
+
+## 搜索前框架验证（仅 Plugin 模式）
+
+`operator_search.py run` 在搜索循环开始前自动执行框架验证：
+
+1. 以 `USE_FLAGGEMS=0 VLLM_FL_PREFER_ENABLED=false` 启动服务（禁用所有算子，仅保留 plugin 框架）
+2. 运行 quick benchmark
+3. 与 native_throughput 对比
+
+| ratio | 结论 | 行为 |
+|-------|------|------|
+| ≥95% | 框架零开销 | PASS，正常搜索 |
+| 80-95% | 框架轻微开销 | WARNING，搜索继续但摘要标注 |
+| <80% | 框架严重问题 | ERROR，建议先排查 plugin 再搜索算子（不中断） |
+
+预检结果保存在 `results/preflight_framework.json`。
+
+## 排序一致性约束
+
+**二分搜索全程必须使用同一排序的算子列表。** 初始化时每组的算子列表会被排序并固化到 state 中，后续每次 `next` 操作都会校验当前组内算子排序与初始化时一致。
+
+如果检测到排序不一致（如外部修改了 state 文件），会抛出 `ValueError` 并中止搜索，防止产生不可比较的结果。
 
 ## 搜索限制
 

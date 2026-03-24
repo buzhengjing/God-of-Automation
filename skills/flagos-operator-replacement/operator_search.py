@@ -384,6 +384,81 @@ def update_optimizer_result(state_path: str, optimizer_script: str,
 
 
 # =============================================================================
+# 框架开销预检
+# =============================================================================
+
+def preflight_framework_check(service_startup_cmd: str,
+                               perf_config: str,
+                               native_throughput: float,
+                               wait_script: str = DEFAULT_WAIT_SCRIPT,
+                               benchmark_script: str = DEFAULT_BENCHMARK_SCRIPT) -> Dict[str, Any]:
+    """
+    Plugin 模式搜索前预检：验证 plugin 框架本身是否有性能开销。
+
+    以 USE_FLAGGEMS=0 VLLM_FL_PREFER_ENABLED=false 启动服务（禁用所有 FlagGems 算子），
+    运行 quick benchmark 与 native_throughput 对比。
+
+    返回:
+        {"pass": bool, "ratio": float, "throughput": float, "message": str}
+    """
+    print("\n" + "=" * 60)
+    print("[Preflight] 验证 plugin 框架开销")
+    print("=" * 60)
+
+    # 以 USE_FLAGGEMS=0 启动（完全禁用 FlagGems，仅保留 plugin 框架）
+    env_inline = "USE_FLAGGEMS=0 VLLM_FL_PREFER_ENABLED=false"
+    if not restart_service(SERVICE_STOP_CMD, service_startup_cmd, wait_script,
+                           env_inline=env_inline):
+        return {"pass": False, "ratio": 0, "throughput": 0,
+                "message": "ERROR: 框架预检服务启动失败"}
+
+    # 运行 quick benchmark
+    bench = run_benchmark_quick(perf_config, benchmark_script, "preflight_framework")
+    if not bench.get("success"):
+        return {"pass": False, "ratio": 0, "throughput": 0,
+                "message": f"ERROR: 框架预检 benchmark 失败: {bench.get('error', '?')}"}
+
+    # 取最大吞吐量与 native 对比
+    throughputs = bench.get("throughputs", {})
+    if not throughputs:
+        return {"pass": False, "ratio": 0, "throughput": 0,
+                "message": "ERROR: 框架预检无有效吞吐量数据"}
+
+    max_tp = max(throughputs.values())
+    ratio = max_tp / native_throughput if native_throughput > 0 else 0
+
+    result = {
+        "throughput": round(max_tp, 2),
+        "native_throughput": round(native_throughput, 2),
+        "ratio": round(ratio, 4),
+        "throughputs": throughputs,
+    }
+
+    if ratio >= 0.95:
+        result["pass"] = True
+        result["message"] = f"PASS: 框架零开销 (ratio={ratio*100:.1f}%)"
+        print(f"\n  [Preflight] {result['message']}")
+    elif ratio >= 0.80:
+        result["pass"] = True
+        result["message"] = f"WARNING: 框架有轻微开销 (ratio={ratio*100:.1f}%)，继续搜索但需关注"
+        print(f"\n  [Preflight] {result['message']}")
+    else:
+        result["pass"] = False
+        result["message"] = f"ERROR: 框架本身性能 <80% (ratio={ratio*100:.1f}%)，建议先排查 plugin 问题再搜索算子"
+        print(f"\n  [Preflight] {result['message']}")
+
+    # 保存预检结果
+    pf_path = str(Path(perf_config).parent.parent / "results" / "preflight_framework.json")
+    try:
+        save_json(result, pf_path)
+        print(f"  预检结果已保存: {pf_path}")
+    except Exception:
+        pass
+
+    return result
+
+
+# =============================================================================
 # 主搜索循环
 # =============================================================================
 
@@ -483,14 +558,41 @@ def run_full_search(state_path: str, perf_config: str,
                     capabilities: Optional[List[str]] = None,
                     **kwargs) -> Dict[str, Any]:
     """运行完整搜索循环"""
+    # 读取搜索方向
+    try:
+        _state = load_json(state_path)
+        search_direction = _state.get("search_direction", "forward")
+    except Exception:
+        search_direction = "forward"
+
     print(f"\n{'#' * 60}")
     print(f"# 算子搜索开始 (最多 {max_rounds} 轮)")
     if plugin_mode:
         print(f"# 模式: Plugin (OOT → group 两阶段)")
+    print(f"# 搜索方向: {search_direction}")
     print(f"{'#' * 60}\n")
 
     search_log = []
     start_time = time.time()
+    framework_check = None
+
+    # Plugin 模式：搜索前验证框架开销
+    if plugin_mode:
+        try:
+            _state = load_json(state_path)
+            native_tp = _state.get("native_throughput", 0)
+        except Exception:
+            native_tp = 0
+
+        if native_tp > 0:
+            framework_check = preflight_framework_check(
+                service_startup_cmd, perf_config, native_tp,
+                wait_script=kwargs.get("wait_script", DEFAULT_WAIT_SCRIPT),
+                benchmark_script=kwargs.get("benchmark_script", DEFAULT_BENCHMARK_SCRIPT),
+            )
+            if not framework_check.get("pass") and framework_check.get("ratio", 1.0) < 0.80:
+                print("\nERROR: 框架本身性能 <80%，建议先排查 plugin 问题")
+                print("搜索仍将继续，但结果可能不可靠\n")
 
     for round_num in range(1, max_rounds + 1):
         print(f"\n{'=' * 60}")
@@ -524,9 +626,11 @@ def run_full_search(state_path: str, perf_config: str,
         "elapsed_seconds": round(elapsed),
         "elapsed_display": f"{int(elapsed // 60)}m{int(elapsed % 60)}s",
         "final_status": state.get("status", "unknown"),
+        "search_direction": state.get("search_direction", "forward"),
         "enabled_ops": len(state.get("enabled_ops", [])),
         "disabled_ops": len(state.get("disabled_ops", [])),
         "disabled_list": state.get("disabled_ops", []),
+        "framework_check": framework_check,
         "search_log": search_log,
     }
 
@@ -621,6 +725,7 @@ def main():
             info = {
                 "status": state.get("status"),
                 "search_mode": state.get("search_mode"),
+                "search_direction": state.get("search_direction", "forward"),
                 "current_step": state.get("current_step"),
                 "enabled": len(state.get("enabled_ops", [])),
                 "disabled": len(state.get("disabled_ops", [])),

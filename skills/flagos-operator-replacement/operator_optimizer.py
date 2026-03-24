@@ -344,6 +344,7 @@ def init_optimization(ops_file: str, native_throughput: float,
                       group_search: bool = True,
                       plugin_mode: bool = False,
                       oot_ops: Optional[List[str]] = None,
+                      reverse: bool = False,
                       state_path: Optional[str] = None) -> Dict[str, Any]:
     """
     初始化优化状态。
@@ -356,6 +357,7 @@ def init_optimization(ops_file: str, native_throughput: float,
         group_search: 启用分组二分搜索（默认 True）
         plugin_mode: 是否为 plugin 场景（使用环境变量控制）
         oot_ops: 自定义 OOT 算子列表（默认使用 OOT_OPERATORS）
+        reverse: 反向搜索（从全禁用逐步启用），适合大量注册算子但少量运行时调用的场景
     """
     with open(ops_file, "r", encoding="utf-8") as f:
         ops_data = json.load(f)
@@ -411,17 +413,26 @@ def init_optimization(ops_file: str, native_throughput: float,
             "ops": effective_oot_ops,
         }
 
+    # 反向模式：初始全部禁用（= Native 基线），逐步启用定位问题算子
+    if reverse:
+        init_enabled = []
+        init_disabled = sorted(all_ops)
+    else:
+        init_enabled = sorted(all_ops)
+        init_disabled = []
+
     state = {
         "all_ops": all_ops,
         "search_ops": search_ops,
-        "enabled_ops": sorted(all_ops),
-        "disabled_ops": [],
+        "enabled_ops": init_enabled,
+        "disabled_ops": init_disabled,
         "native_throughput": native_throughput,
         "target_ratio": target_ratio,
         "current_ratio": 0.0,
         "search_log": [],
         "status": "in_progress",
         "search_mode": "group" if group_search else "linear",
+        "search_direction": "reverse" if reverse else "forward",
         "search_phase": search_phase,  # oot -> group -> done
         "plugin_mode": plugin_mode,
         "oot_state": oot_state,
@@ -437,7 +448,8 @@ def init_optimization(ops_file: str, native_throughput: float,
     save_state(state, state_path)
 
     print(f"优化已初始化: {len(all_ops)} 个算子, 搜索范围 {len(search_ops)} 个")
-    print(f"搜索模式: {'分组二分' if group_search else '线性'}")
+    direction_label = "反向（全禁用→逐步启用）" if reverse else "正向（全启用→逐步禁用）"
+    print(f"搜索模式: {'分组二分' if group_search else '线性'}, 方向: {direction_label}")
     if plugin_mode:
         print(f"Plugin 模式: OOT 算子 {len(effective_oot_ops)} 个 ({', '.join(effective_oot_ops)})")
         print(f"搜索阶段: OOT -> group -> done")
@@ -591,6 +603,92 @@ def get_next_action_group(state: Dict[str, Any], state_path: Optional[str] = Non
     return {"action": "error", "message": f"未知阶段: {gs['phase']}"}
 
 
+def _validate_ops_consistency(group_ops: List[str], state_groups: Dict[str, List[str]],
+                               group_name: str):
+    """校验组内算子排序与初始化时一致，防止二分搜索中途排序变化导致废轮"""
+    expected = state_groups.get(group_name, [])
+    if group_ops != expected:
+        raise ValueError(
+            f"排序不一致: group '{group_name}' 当前 {group_ops[:3]}... "
+            f"vs 初始化时 {expected[:3]}... — 二分搜索全程必须使用同一排序列表"
+        )
+
+
+def get_next_action_group_reverse(state: Dict[str, Any],
+                                   state_path: Optional[str] = None) -> Dict[str, Any]:
+    """反向分组搜索：从全禁用出发，逐组启用定位问题算子"""
+    gs = state["group_state"]
+    groups = state.get("groups", {})
+
+    if gs["phase"] == "done" or gs["current_group_idx"] >= len(gs["group_order"]):
+        state["status"] = "completed"
+        state["completed_at"] = datetime.now().isoformat()
+        save_state(state, state_path)
+        return {"action": "completed", "message": "反向搜索完成：所有组已测试"}
+
+    current_group = gs["group_order"][gs["current_group_idx"]]
+    group_ops = groups.get(current_group, [])
+    _validate_ops_consistency(group_ops, groups, current_group)
+
+    if gs["phase"] == "group_test":
+        # 反向阶段 1：整组启用测试（从 disabled 移到 enabled）
+        test_enabled = sorted(set(state["enabled_ops"] + group_ops))
+        test_disabled = [op for op in state["disabled_ops"] if op not in group_ops]
+
+        state["current_step"] += 1
+        save_state(state, state_path)
+
+        return {
+            "action": "test_enable_group",
+            "group": current_group,
+            "group_ops": group_ops,
+            "step": state["current_step"],
+            "test_enabled_ops": test_enabled,
+            "test_disabled_ops": test_disabled,
+            "message": f"[反向] 测试启用 '{current_group}' ({len(group_ops)} 个算子)",
+        }
+
+    elif gs["phase"] == "binary_search":
+        # 反向阶段 2：组内二分，逐步启用子集定位问题算子
+        bs = gs["binary_state"]
+        if not bs or bs["low"] >= bs["high"]:
+            gs["group_results"][current_group] = "binary_searched"
+            gs["current_group_idx"] += 1
+            gs["phase"] = "group_test"
+            gs["binary_state"] = None
+            save_state(state, state_path)
+            return get_next_action_group_reverse(state, state_path)
+
+        # 校验二分状态的算子列表未被修改
+        if bs["ops"] != groups.get(current_group, []):
+            raise ValueError("binary_state.ops 与初始分组不一致，搜索结果不可比较")
+
+        mid = (bs["low"] + bs["high"]) // 2
+        # 启用前半部分 [low, mid]
+        mid_ops = bs["ops"][bs["low"]:mid + 1]
+        bs["mid"] = mid
+        bs["mid_ops"] = mid_ops
+
+        test_enabled = sorted(set(state["enabled_ops"] + mid_ops))
+        test_disabled = [op for op in state["disabled_ops"] if op not in mid_ops]
+
+        state["current_step"] += 1
+        save_state(state, state_path)
+
+        return {
+            "action": "test_enable_binary",
+            "group": current_group,
+            "binary_range": f"[{bs['low']}, {mid}] of {len(bs['ops'])}",
+            "test_ops": mid_ops,
+            "step": state["current_step"],
+            "test_enabled_ops": test_enabled,
+            "test_disabled_ops": test_disabled,
+            "message": f"[反向] 二分 '{current_group}': 启用 {len(mid_ops)} 个算子 [{bs['low']}:{mid}]",
+        }
+
+    return {"action": "error", "message": f"未知阶段: {gs['phase']}"}
+
+
 def get_next_action_linear(state: Dict[str, Any], state_path: Optional[str] = None) -> Dict[str, Any]:
     """线性逐个搜索的下一步操作（兼容旧模式）"""
     step = state["current_step"]
@@ -642,8 +740,12 @@ def get_next_action(state_path: Optional[str] = None) -> Dict[str, Any]:
         return get_next_action_group(state, state_path)
 
     # group / linear 阶段
+    is_reverse = state.get("search_direction") == "reverse"
     if state.get("search_mode") == "group":
-        action = get_next_action_group(state, state_path)
+        if is_reverse:
+            action = get_next_action_group_reverse(state, state_path)
+        else:
+            action = get_next_action_group(state, state_path)
     else:
         action = get_next_action_linear(state, state_path)
 
@@ -717,7 +819,11 @@ def update_result(op_name: str, throughput: Optional[float] = None,
     if search_phase in ("oot", "oot_verify"):
         _update_oot_result(state, op_name, ratio, target_ratio, log_entry)
     elif search_mode == "group":
-        _update_group_result(state, op_name, ratio, target_ratio, log_entry)
+        is_reverse = state.get("search_direction") == "reverse"
+        if is_reverse:
+            _update_group_result_reverse(state, op_name, ratio, target_ratio, log_entry)
+        else:
+            _update_group_result(state, op_name, ratio, target_ratio, log_entry)
     else:
         _update_linear_result(state, op_name, ratio, target_ratio, log_entry)
 
@@ -862,6 +968,94 @@ def _update_group_result(state: Dict[str, Any], op_name: str,
             print(f"  [{current_group}] 二分搜索完成")
 
 
+def _update_group_result_reverse(state: Dict[str, Any], op_name: str,
+                                  ratio: float, target_ratio: float,
+                                  log_entry: Dict[str, Any]):
+    """处理反向分组搜索的结果更新（启用算子后判断性能）"""
+    gs = state["group_state"]
+    groups = state.get("groups", {})
+
+    if gs["current_group_idx"] >= len(gs["group_order"]):
+        return
+
+    current_group = gs["group_order"][gs["current_group_idx"]]
+    group_ops = groups.get(current_group, [])
+
+    if gs["phase"] == "group_test":
+        if ratio >= target_ratio:
+            # 整组启用后仍达标 → 该组安全，保留启用
+            log_entry["decision"] = "group_enabled"
+            log_entry["reason"] = f"[反向] 启用 {current_group} 后 ratio {ratio*100:.1f}% >= {target_ratio*100:.0f}%"
+            for op in group_ops:
+                if op not in state["enabled_ops"]:
+                    state["enabled_ops"].append(op)
+                    state["enabled_ops"].sort()
+                if op in state["disabled_ops"]:
+                    state["disabled_ops"].remove(op)
+            gs["group_results"][current_group] = "all_enabled"
+            gs["current_group_idx"] += 1
+            print(f"  [{current_group}] 整组启用安全 - {ratio*100:.1f}% >= {target_ratio*100:.0f}%")
+        else:
+            # 不达标 → 该组有问题算子 → 回退到 disabled → 进入二分
+            log_entry["decision"] = "need_binary_search"
+            log_entry["reason"] = f"[反向] 启用 {current_group} 后 ratio {ratio*100:.1f}% < {target_ratio*100:.0f}%"
+            # 确保组内算子全部在 disabled（回退）
+            for op in group_ops:
+                if op in state["enabled_ops"]:
+                    state["enabled_ops"].remove(op)
+                if op not in state["disabled_ops"]:
+                    state["disabled_ops"].append(op)
+            gs["phase"] = "binary_search"
+            gs["binary_state"] = {
+                "ops": group_ops,
+                "low": 0,
+                "high": len(group_ops) - 1,
+                "mid": 0,
+                "mid_ops": [],
+            }
+            print(f"  [{current_group}] 有问题算子，需二分 - {ratio*100:.1f}% < {target_ratio*100:.0f}%")
+
+    elif gs["phase"] == "binary_search":
+        bs = gs["binary_state"]
+        mid = bs["mid"]
+        mid_ops = bs["mid_ops"]
+
+        if ratio >= target_ratio:
+            # 启用前半仍达标 → 前半安全，保留启用，继续测试后半
+            log_entry["decision"] = "binary_enabled_half"
+            for op in mid_ops:
+                if op not in state["enabled_ops"]:
+                    state["enabled_ops"].append(op)
+                    state["enabled_ops"].sort()
+                if op in state["disabled_ops"]:
+                    state["disabled_ops"].remove(op)
+            bs["low"] = mid + 1
+            print(f"  [{current_group}] 二分: 前半安全启用, 继续 [{bs['low']},{bs['high']}]")
+        else:
+            # 启用前半不达标 → 前半有问题 → 回退前半到 disabled
+            log_entry["decision"] = "binary_reverted_half"
+            for op in mid_ops:
+                if op in state["enabled_ops"]:
+                    state["enabled_ops"].remove(op)
+                if op not in state["disabled_ops"]:
+                    state["disabled_ops"].append(op)
+            if mid_ops and len(mid_ops) == 1:
+                # 单个算子定位 → 保持禁用，继续下一段
+                print(f"  [{current_group}] 二分: 定位问题算子 '{mid_ops[0]}', 保持禁用")
+                bs["low"] = mid + 1
+            else:
+                bs["high"] = mid
+                print(f"  [{current_group}] 二分: 前半有问题, 缩小到 [{bs['low']},{bs['high']}]")
+
+        # 检查二分是否完成
+        if bs["low"] > bs["high"]:
+            gs["group_results"][current_group] = "binary_searched"
+            gs["current_group_idx"] += 1
+            gs["phase"] = "group_test"
+            gs["binary_state"] = None
+            print(f"  [{current_group}] 反向二分完成")
+
+
 def _update_linear_result(state: Dict[str, Any], op_name: str,
                           ratio: float, target_ratio: float,
                           log_entry: Dict[str, Any]):
@@ -976,6 +1170,7 @@ def generate_report(state_path: Optional[str] = None) -> str:
     report.append("=" * 60)
     report.append(f"状态: {state['status']}")
     report.append(f"搜索模式: {state.get('search_mode', 'linear')}")
+    report.append(f"搜索方向: {state.get('search_direction', 'forward')}")
     report.append(f"原生吞吐量: {state['native_throughput']:.2f} tok/s")
     report.append(f"目标比率: {state['target_ratio']*100:.0f}%")
     report.append(f"目标吞吐量: {state['native_throughput'] * state['target_ratio']:.2f} tok/s")
@@ -1039,6 +1234,7 @@ def main():
     init_parser.add_argument("--no-group-search", action="store_true", help="禁用分组二分，使用线性搜索")
     init_parser.add_argument("--plugin-mode", action="store_true", help="Plugin 模式（使用环境变量控制，含 OOT 搜索）")
     init_parser.add_argument("--oot-ops", help="自定义 OOT 算子列表（逗号分隔，默认使用内置列表）")
+    init_parser.add_argument("--reverse", action="store_true", help="反向搜索（从全禁用逐步启用，适合大量算子注册干扰 dispatch 的场景）")
     init_parser.add_argument("--state-path", help="状态文件路径")
 
     # next 子命令
@@ -1082,6 +1278,7 @@ def main():
             group_search=not args.no_group_search,
             plugin_mode=args.plugin_mode,
             oot_ops=oot_ops_list,
+            reverse=args.reverse,
             state_path=args.state_path,
         )
 
@@ -1107,6 +1304,7 @@ def main():
         status_info = {
             "status": state["status"],
             "search_mode": state.get("search_mode", "linear"),
+            "search_direction": state.get("search_direction", "forward"),
             "search_phase": state.get("search_phase", "group"),
             "plugin_mode": state.get("plugin_mode", False),
             "progress": f"step {state['current_step']}",
