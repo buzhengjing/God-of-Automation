@@ -28,6 +28,7 @@
 | 性能测试 / benchmark / vllm bench | flagos-performance-testing | `skills/flagos-performance-testing/SKILL.md` |
 | 算子替换 / operator replacement / 算子优化 | flagos-operator-replacement | `skills/flagos-operator-replacement/SKILL.md` |
 | 精度评测 / eval correctness / accuracy test | flagos-eval-correctness | `skills/flagos-eval-correctness/SKILL.md` |
+| 综合评测 / comprehensive eval / 本地评测 / quick 评测 / evalscope | flagos-eval-comprehensive | `skills/flagos-eval-comprehensive/SKILL.md` |
 | 日志分析 / analyze logs | flagos-log-analyzer | `skills/flagos-log-analyzer/SKILL.md` |
 
 ---
@@ -50,10 +51,10 @@
              ├── 成功 → 在 plugin+FlagTree 环境进行三版测试
              └── 失败 → ④c 恢复环境（重新 run 容器 或 卸载 FlagTree）
                         → 在初始环境进行三版测试
-⑤ eval-correctness (native)     → 精度评测（询问用户）
-⑥ performance-testing (native)  → Native 性能基线（关闭 FlagGems）
-⑦ service-startup (flagos)      → 启用全量 FlagGems
-⑧ eval-correctness (full-flagos)→ 精度评测（询问用户）+ 算子报错自动处理
+⑤ eval-comprehensive (native)    → 精度评测（询问用户，quick 模式可跳过）
+⑥ performance-testing (native)   → Native 性能基线（关闭 FlagGems）
+⑦ service-startup (flagos)       → 启用全量 FlagGems
+⑧ eval-comprehensive (full-flagos)→ 精度评测（**必须执行，不可跳过**）+ 算子报错自动处理
 ⑨ performance-testing (full)    → Full FlagGems 性能
 ⑩ [自动] 性能对比               → full_flagos/native ≥ 80%?
    ├── 是 → Optimized = Full，跳到 ⑬
@@ -72,6 +73,7 @@
 - 区别仅在于：性能测试用 `--strategy quick`（只跑 prefill1_decode512），精度评测用 `--quick`（AIME25 only）
 - 目标：验证流程可走通 + 快速筛查算子问题（启动崩溃、eval 报错、精度不达标、性能不达标）
 - 算子搜索内部始终用 quick benchmark，与外层模式无关
+- **精度评测规则**：步骤⑤（Native 精度）可跳过；步骤⑧（FlagGems 精度）**绝对不能跳过**，因为开启 FlagGems 后必须验证算子兼容性和精度
 
 **正式评测**（复测阶段）：
 - Quick 筛查完毕、算子问题已修复后，从步骤⑤或⑥开始复测
@@ -113,7 +115,7 @@
 1. **docker run 命令最终确认** — 不可逆操作，需用户确认参数
 2. **容器网络不通且需要代理配置** — 自动检测网络后才问
 3. **搜索 3 轮仍未达标** — 需要用户决定是否继续
-4. **精度评测是否执行** — 服务启动后、性能测试前，询问用户是否需要精度评测
+4. **精度评测是否执行** — 仅步骤⑤（Native 精度）询问用户，quick 模式下可跳过；步骤⑧（FlagGems 精度）**强制执行不询问**
 5. **是否安装 FlagTree** — 步骤④，初始环境验证通过后询问
 6. **FlagTree 安装失败时，是否重新 run 容器** — 恢复环境需用户确认
 
@@ -339,6 +341,12 @@ GPU: <gpu_count>x <gpu_type>
 6. **每个 Skill 完成后必须写入对应的 trace JSON**，记录实际执行的命令、参数和关键输出
 7. **禁止添加 SKILL.md 未记录的 vLLM/sglang 启动参数**（如 `--enforce-eager`、`--disable-log-stats` 等），遇到启动问题应分析日志找根因，而非猜测参数绕过
 8. **精度评测和性能测试严禁同时进行**。必须等一个完全结束后再启动另一个。并发执行会互相抢占 GPU 资源，导致两边结果都不可信。启动前必须检查是否有正在运行的评测/测试进程
+9. **算子列表以 `flaggems_enable_oplist.txt` 为唯一权威来源**。每次服务启动后必须检查该文件（默认 `/tmp/flaggems_enable_oplist.txt`）：
+   - **文件存在且有内容** → FlagGems 实际在运行，以此文件内容作为当前生效的算子列表
+   - **文件不存在或为空** → FlagGems 未启用，不依赖任何缓存的算子列表
+   - 每次 FlagGems 重新启动都会**重新生成**此文件，内容反映 blacklist 等配置生效后的实际结果
+   - 如果启动模式为 native 但文件残留 → 是上次 flagos 的旧数据，不可作为当前算子列表
+   - 所有后续操作（算子替换、搜索、性能对比、报告生成）中的"当前算子列表"均以此文件为准
 
 ---
 

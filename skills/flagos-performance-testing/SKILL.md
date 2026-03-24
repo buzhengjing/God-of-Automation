@@ -1,7 +1,7 @@
 ---
 name: flagos-performance-testing
-description: 三版性能基准测试（Native / Full FlagGems / Optimized FlagGems），三档策略（quick/fast/comprehensive）、可选 final-burst、per-test-case 超时、标准 markdown 输出格式
-version: 7.0.0
+description: 三版性能基准测试（Native / Full FlagGems / Optimized FlagGems），四档策略（quick/fast/comprehensive/fixed）、可选 final-burst、per-test-case 超时、标准 markdown 输出格式
+version: 7.1.0
 triggers:
   - 性能测试
   - benchmark
@@ -23,17 +23,34 @@ provides:
 
 支持三版自动化性能测试：Native → Full FlagGems → Optimized FlagGems（如需优化），标准 markdown 三列表格输出。
 
-**三档测试策略**（`--strategy` 参数）：
+**四档测试策略**（`--strategy` 参数）：
 
 | strategy | 含义 | 用例选择 | 并发行为 | 样本量 |
 |----------|------|----------|----------|--------|
 | `quick` | 烟雾测试 | 只跑 `prefill1_decode512` | 所有 levels 到 256，不早停 | `num_prompts=concurrency` |
 | `fast` | 饱和即停（默认） | 所有 enabled 用例 | 按 `early_stop` 配置决定 | `num_prompts=concurrency` |
 | `comprehensive` | 全跑 | 所有 enabled 用例 | 所有并发全跑，强制不早停 | `num_prompts=concurrency` |
+| `fixed` | 固定并发 | 只跑有 `fixed_concurrency` 的用例 | 只跑配置的固定并发级别 | `num_prompts=concurrency` |
 
 **所有档统一 `num_prompts=concurrency`**，因此 quick 产出的 `prefill1_decode512` 数据可直接复用，全量测试无需重跑该用例。
 
 **策略选择**：在流程开始前询问用户选择 strategy，一旦选定，整个流程的所有性能测试统一使用同一策略。
+
+**Fixed 策略**：用于快速测试特定场景，跳过并发搜索。在 `perf_config.yaml` 中为测试用例添加 `fixed_concurrency` 字段即可：
+
+```yaml
+- name: "1k_input_1k_output"
+  input_len: 1024
+  output_len: 1024
+  enabled: true
+  fixed_concurrency: 64  # fixed 策略时只跑并发 64
+
+- name: "32k_input_1k_output"
+  input_len: 32768
+  output_len: 1024
+  enabled: true
+  fixed_concurrency: 1   # fixed 策略时只跑并发 1
+```
 
 **Final Burst**：默认不跑。用户显式传入 `--final-burst` 才追加无限制并发大规模测试。一旦用户选择了 `--final-burst`，后续同流程的所有性能测试都加此 flag。
 
@@ -43,7 +60,7 @@ provides:
 - `flagos_optimized.json` — Optimized FlagGems（≥80% 组合，如需优化才产出）
 
 **工具脚本**（已由 setup_workspace.sh 部署到容器）:
-- `benchmark_runner.py` — 性能测试（`--strategy quick/fast/comprehensive` + 可选 `--final-burst`）
+- `benchmark_runner.py` — 性能测试（`--strategy quick/fast/comprehensive/fixed` + 可选 `--final-burst`）
 - `performance_compare.py` — 性能对比（`--format markdown` 标准三列表格输出）
 
 ---
@@ -64,8 +81,8 @@ docker exec $CONTAINER bash -c "pgrep -f 'eval_aime\|eval_erqa\|eval_monitor' &&
 **策略触发规则**：
 - 用户说"快速测试"/"走通流程"/"smoke test"/"验证流程"→ `--strategy quick`
 - 用户说"完整测试"/"全量"/"所有并发"→ `--strategy comprehensive`
+- 用户说"只测试特定场景"/"固定并发"/"1k-1k-64"→ `--strategy fixed`
 - 默认（或用户说"正常测试"/"标准"）→ `--strategy fast`
-- quick 模式只跑 `prefill1_decode512` 用例，num_prompts=concurrency，并发到 256
 
 ---
 

@@ -35,6 +35,7 @@ LLM:
       display_name: "AIME25_0shot"
       description: "美国数学邀请赛 2025"
       thinking: true                             # 竞赛数学
+      quick: true                                # Quick 模式跑这个 benchmark
       reference_scores:
         Qwen3-8B: 30.0
       args:

@@ -3,7 +3,7 @@
 vLLM 性能基准测试工具 (重构版)
 
 基于 perf.py 重构，新增:
-- --strategy: 三档测试强度 (quick/fast/comprehensive)
+- --strategy: 四档测试强度 (quick/fast/comprehensive/fixed)
 - --final-burst: 显式 opt-in 最终无限制并发测试 (num_prompts=1000)
 - --output-name: 指定输出文件名
 - --output-dir: 指定输出目录
@@ -19,6 +19,7 @@ Usage:
     python benchmark_runner.py --config config.yaml --strategy fast
     python benchmark_runner.py --config config.yaml --strategy quick
     python benchmark_runner.py --config config.yaml --strategy comprehensive
+    python benchmark_runner.py --config config.yaml --strategy fixed
     python benchmark_runner.py --config config.yaml --strategy fast --final-burst
     python benchmark_runner.py --config config.yaml --quick          # 向后兼容
     python benchmark_runner.py --config config.yaml --concurrency-search  # 向后兼容
@@ -253,6 +254,12 @@ def run_test_case(config: Dict[str, Any], test_case: Dict[str, Any],
 
     if strategy == "quick":
         results = run_quick_test(base_cmd, levels, dry_run, timeout)
+    elif strategy == "fixed":
+        # fixed: 只跑 fixed_concurrency 指定的单个并发级别
+        fixed_conc = test_case.get("fixed_concurrency")
+        if fixed_conc is None:
+            raise ValueError(f"Test case {test_case['name']} missing fixed_concurrency for --strategy fixed")
+        results = run_single_concurrency(base_cmd, fixed_conc, dry_run, timeout)
     elif strategy == "comprehensive":
         # comprehensive: 所有并发全跑，强制不早停
         results = run_concurrency_search(base_cmd, levels, dry_run, timeout,
@@ -399,6 +406,30 @@ def run_quick_test(base_cmd: List[str], levels: List[int],
     return results
 
 
+def run_single_concurrency(base_cmd: List[str], concurrency: int,
+                           dry_run: bool = False,
+                           timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
+    """
+    Fixed 模式：只跑单个固定并发级别。
+
+    用于 --strategy fixed，跳过搜索，直接测试指定并发。
+    """
+    print(f"  [FIXED MODE] concurrency={concurrency}")
+    metrics = run_benchmark(base_cmd, concurrency, concurrency, dry_run, timeout)
+    results = {str(concurrency): metrics}
+
+    throughput = metrics.get('Output token throughput (tok/s)', 0) or 0
+    results["_search_meta"] = {
+        "best_concurrency": concurrency,
+        "best_throughput": throughput,
+        "tested_levels": [concurrency],
+        "all_levels_tested": True,
+        "fixed_mode": True,
+    }
+
+    return results
+
+
 def run_final_burst(base_cmd: List[str], final_num_prompts: int,
                     results: Dict[str, Any], dry_run: bool = False,
                     timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
@@ -504,7 +535,7 @@ def print_summary(results: Dict[str, Any], mode: str = "default"):
 # Strategy 解析
 # =============================================================================
 
-STRATEGY_CHOICES = ['quick', 'fast', 'comprehensive']
+STRATEGY_CHOICES = ['quick', 'fast', 'comprehensive', 'fixed']
 
 
 def resolve_strategy(args) -> str:
@@ -532,7 +563,7 @@ def main():
                         help="跳过指定用例（可多次使用），如 --skip-case prefill1_decode512")
     parser.add_argument("--dry-run", action="store_true", help="仅打印命令")
     parser.add_argument("--strategy", choices=STRATEGY_CHOICES,
-                        help="测试策略: quick(烟雾测试) / fast(饱和即停,默认) / comprehensive(全跑)")
+                        help="测试策略: quick(烟雾测试) / fast(饱和即停,默认) / comprehensive(全跑) / fixed(固定并发)")
     parser.add_argument("--final-burst", action="store_true",
                         help="追加无限制并发的大规模最终测试")
     # 向后兼容别名
@@ -570,6 +601,12 @@ def main():
         if not test_matrix:
             print(f"WARN: 未找到 '{QUICK_TEST_CASE_NAME}' 用例，使用第一个已启用的用例")
             test_matrix = [tc for tc in config["test_matrix"] if tc.get("enabled", True)][:1]
+    elif strategy == "fixed":
+        # fixed 模式：只跑有 fixed_concurrency 字段的用例
+        test_matrix = [tc for tc in test_matrix if tc.get("enabled", True) and "fixed_concurrency" in tc]
+        if not test_matrix:
+            print("ERROR: --strategy fixed 需要至少一个用例配置了 fixed_concurrency 字段")
+            sys.exit(1)
     else:
         # fast / comprehensive：跑所有 enabled 用例
         test_matrix = [tc for tc in test_matrix if tc.get("enabled", True)]
@@ -592,6 +629,7 @@ def main():
         "quick": "[策略] quick — 烟雾测试（num_prompts=concurrency, 只跑 prefill1_decode512）",
         "fast": "[策略] fast — 智能搜索（num_prompts=concurrency, 饱和即停）",
         "comprehensive": "[策略] comprehensive — 全量测试（num_prompts=concurrency, 所有并发全跑）",
+        "fixed": "[策略] fixed — 固定并发（只跑配置的 fixed_concurrency 级别）",
     }
     print(strategy_labels[strategy])
     if args.final_burst:

@@ -177,6 +177,8 @@ service:
   model_id: ""            # API 返回的模型 ID
   log_path: ""            # 服务日志路径
   gems_txt_path: ""       # gems.txt 文件路径
+  enable_oplist_path: ""  # flaggems_enable_oplist.txt 路径（运行时权威算子列表）
+  enable_oplist_count: 0  # oplist 中的算子数量
   initial_operator_list: [] # 初始算子列表
 
 # ============================================================================

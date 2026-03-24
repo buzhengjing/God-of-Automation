@@ -92,12 +92,14 @@ service:
   model_id: <模型标识符>
   log_path: <日志路径>
   gems_txt_path: <gems.txt 路径>
+  enable_oplist_path: <flaggems_enable_oplist.txt 路径，无则为空>
+  enable_oplist_count: <oplist 中算子数量，无则为 0>
   initial_operator_list: [...]
   max_model_len: <服务实际的 max_model_len>
 runtime:
   framework: <vllm|sglang>
   gpu_count: <GPU 数量>
-  flaggems_enabled: true|false
+  flaggems_enabled: true|false        # 根据 oplist 文件是否存在判断，而非启动模式
   thinking_model: true|false            # 是否为 thinking model（传递给后续评测 Skill）
 ```
 
@@ -317,24 +319,58 @@ curl -s http://localhost:$PORT/v1/chat/completions \
 ============================================================
 ```
 
-## 步骤 7 — 记录算子列表（flagos 模式时，强制）
+## 步骤 7 — 检查算子列表（每次启动后，强制）
 
-FlagGems 启用状态下，**必须记录算子列表**，这是后续算子优化的搜索空间来源。
+**每次服务启动后（无论 default/native/flagos 模式），都必须检查 `flaggems_enable_oplist.txt`。**
+
+该文件是 FlagGems 运行时自动生成的**唯一权威算子列表**，路径默认为 `/tmp/flaggems_enable_oplist.txt`。
 
 ```bash
-# 自动发现并保存算子列表
+# 检查 oplist 文件
+docker exec $CONTAINER bash -c "
+if [ -f /tmp/flaggems_enable_oplist.txt ]; then
+    echo 'OPLIST_FOUND: /tmp/flaggems_enable_oplist.txt'
+    echo 'OPLIST_MTIME:' \$(stat -c %Y /tmp/flaggems_enable_oplist.txt)
+    echo 'OPLIST_COUNT:' \$(wc -l < /tmp/flaggems_enable_oplist.txt)
+    cat /tmp/flaggems_enable_oplist.txt
+else
+    echo 'OPLIST_NOT_FOUND'
+fi
+"
+```
+
+**判断逻辑**：
+
+| 文件状态 | 含义 | 后续操作 |
+|----------|------|----------|
+| 存在且有内容 | FlagGems 实际在运行 | 以此文件内容为当前生效算子列表，同步到 `results/ops_list.json` |
+| 不存在或为空 | FlagGems 未启用 | 不依赖任何缓存的算子列表 |
+
+**文件存在时**：
+
+```bash
+# 以 oplist 文件为准，同步保存到 results/ops_list.json
 docker exec $CONTAINER python3 /flagos-workspace/scripts/operator_optimizer.py discover \
   --save-ops /flagos-workspace/results/ops_list.json
-
-# 检查运行时 gems.txt
-docker exec $CONTAINER find / -name "gems.txt" 2>/dev/null
 ```
+
+**关键原则**：
+- `flaggems_enable_oplist.txt` = 当前实际生效的算子列表，**唯一权威来源**
+- `results/ops_list.json` 是此文件的持久化副本，供后续对比和报告使用
+- 如果启动模式为 flagos 但文件不存在 → 异常，需排查（服务可能未正确加载 FlagGems）
+- 如果启动模式为 native 但文件存在 → 可能是上次 flagos 的残留，不应作为当前算子列表
+- 每次 FlagGems 重新启动都会**重新生成**此文件，内容反映最新的算子配置（含 blacklist 生效后的结果）
 
 **反馈输出**：
 ```
-FlagGems 已启用，记录算子列表：XX 个算子
-算子列表已保存: /flagos-workspace/results/ops_list.json
-gems.txt 路径: /path/to/gems.txt
+# FlagGems 运行时
+算子列表验证：
+  oplist 文件: /tmp/flaggems_enable_oplist.txt
+  当前生效算子: XX 个
+  已同步到: /flagos-workspace/results/ops_list.json
+
+# FlagGems 未运行时
+算子列表检查: oplist 文件不存在，FlagGems 未启用
 ```
 
 ## 步骤 8 — 写入 context.yaml

@@ -1,14 +1,12 @@
 ---
 name: flagos-eval-correctness
-description: 自动化大模型正确性评测，支持完整/quick 双模式。完整模式：远端 FlagRelease 或本地 AIME+ERQA；quick 模式：本地 AIME25 only。含错误自动分析、算子替换重试和本地评测降级。
-version: 5.0.0
+description: 远端 FlagRelease 平台正确性评测，支持提交/查询/对比/停止/恢复。网络不可达时降级到 flagos-eval-comprehensive 本地评测。
+version: 6.0.0
 triggers:
-  - 精度评测
-  - 正确性评测
-  - accuracy test
+  - 远端评测
+  - FlagRelease 评测
+  - remote eval
   - eval correctness
-  - AIME
-  - ERQA
 depends_on:
   - flagos-service-startup
 next_skill: flagos-performance-testing
@@ -19,33 +17,22 @@ provides:
   - eval.results
 ---
 
-# FlagOS 正确性评测 Skill
+# FlagOS 远端正确性评测 Skill
 
-自动化评测大模型正确性，支持**完整评测**和 **quick 评测**双模式。
+通过远端 FlagRelease 平台进行大模型正确性评测。
 
-**双模式**：
+**本 Skill 职责**：远端评测（提交 → 轮询 → 结果获取 → 错误处理）。
 
-| 模式 | 说明 |
-|------|------|
-| **完整评测**（默认） | 远端 FlagRelease 平台（或本地 AIME + ERQA 降级） |
-| **quick 评测** | 本地 AIME25 only，跳过远端和 ERQA，快速验证精度 |
+**本地评测（含 quick 模式）已迁移到 `flagos-eval-comprehensive`**，本 Skill 仅保留远端评测流程。当远端不可达时，降级策略改为引导用户使用 `flagos-eval-comprehensive`。
 
 **工具脚本**（已由 setup_workspace.sh 部署到容器）:
 - `eval_monitor.py` — 评测监控（提交→轮询→结果获取一体化，减少 Claude Code 思考开销）
-- `eval_aime.py` — AIME 本地评测（支持 `--quick` 切换 AIME25 数据集）
-- `eval_erqa.py` — ERQA 本地评测（降级方案）
 
-**在流程中的位置**：
-- 步骤④（Native）和步骤⑦（FlagOS），每次服务启动后、性能测试前执行（询问用户）
-
-**自动化行为**：
-- FlagOS 服务启动后、性能测试前，询问用户是否执行精度评测
-- **迁移场景**：FlagGems 算子首次启用，精度评测可能因算子不兼容报错，自动触发步骤 D（算子报错处理闭环：检测问题算子→关闭→重启服务→重新评测）
-- 支持 `${CMD_PREFIX}` 双执行模式
+**迁移流程步骤⑤⑧的精度评测使用 `flagos-eval-comprehensive`**，本 Skill 用于需要远端 FlagRelease 平台评测的场景。
 
 支持完整的错误处理闭环：
 - 服务端报错（算子问题）→ 自动关闭问题算子 → 重启服务 → 重新提交评测
-- 评测平台不可达 / 网络问题 → 自动降级到本地评测脚本
+- 评测平台不可达 / 网络问题 → 降级到 `flagos-eval-comprehensive` 本地评测
 - 用户提供已有 `request_id` → 直接查询进度和获取结果
 
 ---
@@ -77,7 +64,7 @@ docker exec $CONTAINER bash -c "pgrep -f 'benchmark_runner\|vllm.*bench' && echo
      │                                                      │
      ├── 提交成功 → 监控进度 ───────────────────────────────┤
      │                                                      │
-     └── 提交失败（网络不可达）→ 降级到本地评测（步骤 C）    │
+     └── 提交失败（网络不可达）→ 降级到 flagos-eval-comprehensive │
                                                             │
                                                             ↓
                                                      结果分析与处理
@@ -86,8 +73,8 @@ docker exec $CONTAINER bash -c "pgrep -f 'benchmark_runner\|vllm.*bench' && echo
      │                          │                           │
      ↓                          ↓                           ↓
   正常完成(S)            算子失败(F/OOR)              网络/平台问题
-  → 输出精度报告         → 关闭问题算子              → 降级到本地评测
-                         → 重启服务                     （步骤 C）
+  → 输出精度报告         → 关闭问题算子              → 降级到
+                         → 重启服务                   flagos-eval-comprehensive
                          → 重新提交评测
                            （回到步骤 A）
 ```
@@ -134,6 +121,7 @@ service:
   port: <来自 service-startup>
   healthy: <来自 service-startup>
   gems_txt_path: <来自 service-startup>
+  enable_oplist_path: <来自 service-startup>    # flaggems_enable_oplist.txt 路径（权威算子列表）
   initial_operator_list: <来自 service-startup>
 gpu:
   vendor: <来自 container-preparation>
@@ -172,49 +160,10 @@ eval:
 
 ---
 
-# 本地评测工具说明
+# 本地评测工具
 
-本地评测脚本在远端平台不可用时作为降级方案。
-
-## 目录结构
-
-```
-flagos-eval-correctness/
-├── SKILL.md                     # 本 Skill 文件
-└── tools/
-    ├── config.yaml              # 评测配置文件
-    ├── eval_aime.py             # AIME 评测脚本
-    └── eval_erqa.py             # ERQA 评测脚本
-```
-
-## tools/eval_aime.py
-
-AIME 数学竞赛评测脚本。加载 JSONL 格式数学题，调用模型 API，提取 `[[ANSWER]]数字[[/ANSWER]]` 格式答案，计算准确率。支持并发请求加速评测。
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `--config` | config.yaml | 配置文件 |
-| `--output` | aime_result.json | 结果文件 |
-| `--log` | eval_aime_progress.log | 进度日志 |
-| `--quick` | false | quick 模式：使用 AIME25 数据集，默认全量并发 |
-| `--concurrency` | quick=0(全量并发), full=1(串行) | 并发请求数，0=自动(题目数) |
-| `--dry-run` | false | 测试模式 |
-
-**并发策略**：
-- `--quick` 模式默认全量并发（30 题同时请求），耗时从 30-60 分钟降至 1-3 分钟
-- 完整模式默认串行（避免大量并发影响服务稳定性），可通过 `--concurrency 10` 手动加速
-- vLLM 支持高并发（性能测试验证到 256），30 并发不会造成服务压力
-
-## tools/eval_erqa.py
-
-ERQA 具身推理评测脚本。加载 Parquet 多模态数据，调用视觉语言模型 API，提取 `[[ANSWER]]A/B/C/D[[/ANSWER]]` 格式答案，计算 8 维分类准确率。
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `--config` | config.yaml | 配置文件 |
-| `--output` | erqa_result.json | 结果文件 |
-| `--log` | eval_erqa_progress.log | 进度日志 |
-| `--dry-run` | false | 测试模式 |
+> 本地评测（含 quick 模式）已迁移到 `flagos-eval-comprehensive` Skill。
+> 本 Skill 的 `tools/` 目录下仍保留 `eval_aime.py` 和 `eval_erqa.py` 脚本作为独立工具，但迁移流程中不再直接使用。
 
 ---
 
@@ -226,11 +175,10 @@ ERQA 具身推理评测脚本。加载 Parquet 多模态数据，调用视觉语
 
 | 模式 | 说明 |
 |------|------|
-| **提交新评测（完整）** | 通过远端 API 提交新评测任务（默认） |
-| **quick 评测** | 本地 AIME25 only，跳过远端和 ERQA |
+| **提交新评测** | 通过远端 FlagRelease API 提交新评测任务（默认） |
 | **查询已有任务** | 用户提供 request_id，查询进度或获取结果 |
 
-**quick 评测流程**：选择 quick 后，直接跳转到步骤 C（本地评测），只运行 `eval_aime.py --quick`，跳过 ERQA。
+> **本地评测 / quick 评测**：请使用 `flagos-eval-comprehensive` Skill（支持 `--quick` 模式）。
 
 ---
 
@@ -577,75 +525,15 @@ curl -X GET http://110.43.160.159:5050/evaluation_diffs \
 
 **触发条件**：远端评测平台不可达、网络超时、连接拒绝等。
 
-### C1 — 复制评测工具到容器
+**降级方案**：切换到 `flagos-eval-comprehensive` Skill 进行本地评测。
 
-```bash
-CONTAINER=<container_name>
-docker cp skills/flagos-eval-correctness/tools/. $CONTAINER:/flagos-workspace/eval/
+```
+远端不可达 → 告知用户 → 使用 flagos-eval-comprehensive 执行本地评测
+  - Quick 模式: eval_orchestrator.py --config config.yaml --quick
+  - 全量模式: eval_orchestrator.py --config config.yaml
 ```
 
-### C2 — 准备容器内环境
-
-```bash
-docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
-    if [ ! -d '.venv' ]; then \
-        uv venv && \
-        source .venv/bin/activate && \
-        uv pip install pandas pyarrow pyyaml requests; \
-    fi"
-```
-
-### C3 — 配置模型连接
-
-编辑 `/flagos-workspace/eval/config.yaml`：
-
-```yaml
-model:
-  name: <model_name>           # 从 context.yaml 获取
-  api_base: http://127.0.0.1:8000/v1  # 容器内服务地址
-  api_key: EMPTY
-```
-
-### C3.5 — 服务稳定性预检
-
-本地评测前同样执行崩溃检测（与步骤 A0 相同的命令），确保服务不会在评测过程中崩溃。
-
-### C4 — 运行本地评测
-
-**完整模式**（并行运行 AIME 和 ERQA）：
-```bash
-docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && source .venv/bin/activate && \
-    nohup python eval_aime.py --output /flagos-workspace/results/aime_result.json --log /flagos-workspace/logs/eval_aime_progress.log > /dev/null 2>&1 & \
-    nohup python eval_erqa.py --output /flagos-workspace/results/erqa_result.json --log /flagos-workspace/logs/eval_erqa_progress.log > /dev/null 2>&1 &"
-```
-
-**quick 模式**（AIME25 全量并发，~1-3 分钟）：
-```bash
-docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && source .venv/bin/activate && \
-    python eval_aime.py --quick --output /flagos-workspace/results/aime_result.json --log /flagos-workspace/logs/eval_aime_progress.log"
-```
-
-**评测配置快照**（运行前保存）：
-```bash
-docker exec $CONTAINER cp /flagos-workspace/eval/config.yaml /flagos-workspace/config/eval_config.yaml
-```
-
-### C5 — 监控本地评测进度
-
-```bash
-# 宿主机直接查看（无需 docker exec）
-tail -f /data/flagos-workspace/<model_name>/logs/eval_aime_progress.log
-tail -f /data/flagos-workspace/<model_name>/logs/eval_erqa_progress.log
-```
-
-### C6 — 获取本地评测结果
-
-```bash
-cat /data/flagos-workspace/<model_name>/results/aime_result.json
-cat /data/flagos-workspace/<model_name>/results/erqa_result.json
-```
-
-本地评测过程中如出现服务端报错，同样跳转到步骤 D。
+参考 `flagos-eval-comprehensive/SKILL.md` 获取完整的本地评测步骤。
 
 ---
 
@@ -663,7 +551,7 @@ cat /data/flagos-workspace/<model_name>/results/erqa_result.json
   │
   └── 评测端/网络问题
         特征: timeout, connection refused, 平台 5xx, DNS 解析失败
-        → D2: 降级到本地评测（步骤 C）
+        → D2: 降级到 flagos-eval-comprehensive 本地评测
 ```
 
 ### D1 — 服务端报错处理（算子替换闭环）
@@ -739,7 +627,7 @@ curl -s http://localhost:8000/v1/models | jq .
    ```bash
    curl -s http://localhost:8000/v1/models | jq .
    ```
-3. 跳转到 **步骤 C（本地评测降级）**
+3. 降级到 **`flagos-eval-comprehensive`** 进行本地评测
 
 ---
 
@@ -782,28 +670,6 @@ ERQA            60.00%      56.50%      -3.50%
 结论: [精度对齐 / 存在差异，建议检查]
 ```
 
-## 本地评测结果
-
-与原有格式一致：
-
-```json
-{
-  "err_code": 0,
-  "err_msg": "Get Evaluations Details Sucess!",
-  "eval_results": {
-    "<MODEL_NAME>": {
-      "status": "S",
-      "details": [{
-        "status": "S",
-        "dataset": "AIME_0fewshot_@avg1",
-        "accuracy": 83.33,
-        "rawDetails": {}
-      }]
-    }
-  }
-}
-```
-
 ---
 
 # 故障排查
@@ -811,13 +677,12 @@ ERQA            60.00%      56.50%      -3.50%
 | 问题 | 类型 | 原因 | 解决方案 |
 |------|------|------|----------|
 | 远端提交失败 `err_code=1` | 平台 | 参数错误 | 检查 eval_infos 参数格式 |
-| 连接 110.43.160.159 超时 | 网络 | 平台不可达 | 降级到本地评测（步骤 C） |
+| 连接 110.43.160.159 超时 | 网络 | 平台不可达 | 降级到 flagos-eval-comprehensive 本地评测 |
 | `status: F` 算子失败 | 服务端 | 算子不兼容 | 触发算子替换 → 重启 → 重评（步骤 D1） |
 | `status: OOR` 重试耗尽 | 服务端 | 服务不稳定 | 检查服务日志，可能是算子或 OOM 问题 |
 | `status: C` 已取消 | 人工 | 用户或系统取消 | 使用 `/resume_evaluation` 恢复 |
 | `CUDA error` | 服务端 | 算子不兼容 | 关闭问题算子 → 重启 → 重评 |
 | `OOM` | 服务端 | 显存不足 | 减少 batch_size 或 tensor-parallel-size |
-| 本地评测准确率为 0 | 评测端 | 答案格式问题 | 确认模型输出含 `[[ANSWER]]` |
 | request_id 丢失 | 人工 | 未保存 | 无法恢复，需重新提交 |
 
 ---

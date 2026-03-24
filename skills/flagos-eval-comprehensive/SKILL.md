@@ -1,14 +1,16 @@
 ---
 name: flagos-eval-comprehensive
-description: 基于 EvalScope 的全类型模型正确性评测，支持 LLM/VL/Omni/Robotics/ImageGen 五大类模型自动化评测
-version: 1.1.0
+description: 基于 EvalScope 的全类型模型正确性评测，支持 LLM/VL/Omni/Robotics/ImageGen 五大类模型自动化评测，新增 quick 模式（迁移流程用）
+version: 2.0.0
 triggers:
+  - 精度评测
+  - quick 评测
+  - 本地评测
   - 综合评测
   - 全面评测
   - comprehensive eval
   - evalscope
-  - benchmark
-  - 精度评测
+  - AIME
 depends_on:
   - flagos-service-startup
 next_skill: flagos-performance-testing
@@ -32,6 +34,37 @@ provides:
 | **Omni** | 14+ | LLM 基准 + VL 基准组合（inherit 自动合并） |
 | **Robotics** | 12 | SAT, All-Angles, Where2Place, Blink_ev, RoboSpatial, EgoPlan2, ERQA, CV-Bench, EmbSpatial, VSI-Bench, EmbodiedVerse, MAPE |
 | **ImageGen** | 1 | 定性评估辅助 |
+
+---
+
+## Quick 模式（迁移流程用）
+
+迁移流程步骤⑤⑧使用本 Skill 进行精度评测，支持 quick 和全量两种模式。
+
+| 模式 | 命令参数 | 运行的 Benchmark | 用途 |
+|------|---------|-----------------|------|
+| **Quick** | `--quick` | 仅 `quick: true` 的 benchmark（当前为 AIME25） | 迁移筛查阶段，快速验证精度 |
+| **全量** | 无额外参数 | 该模型类型的全部必测 + 可选 benchmark | 正式评测阶段 |
+
+**Quick 模式与全量模式的区别仅在于数据集选择不同，其他逻辑（配置、执行、报告）完全一致。**
+
+Quick 模式运行命令：
+```bash
+docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
+    python eval_orchestrator.py --config config.yaml --quick"
+```
+
+Quick 模式 + Preflight：
+```bash
+docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
+    python eval_orchestrator.py --config config.yaml --quick --preflight"
+```
+
+**迁移流程中的精度评测规则**：
+- 步骤⑤（Native 精度）：询问用户是否执行，quick 模式下可跳过
+- 步骤⑧（FlagGems 精度）：**必须执行，不可跳过**（即使 quick 模式也必须执行，因为开启 FlagGems 后必须验证算子兼容性和精度）
+
+**扩展 Quick benchmark**：在 `benchmark_registry.yaml` 中为需要的 benchmark 添加 `quick: true` 字段即可，编排器会自动识别。
 
 ---
 
@@ -282,11 +315,12 @@ cat /data/flagos-workspace/<model_name>/eval/eval_report.json
 | `--limit` | 无 | 限制每个 benchmark 的样本数（调试用） |
 | `--preflight` | false | 正式评测前用 limit=2 快速验证所有 benchmark |
 | `--dry-run` | false | 仅打印执行计划，不实际运行 |
+| `--quick` | false | Quick 模式：只跑 registry 中 quick=true 的 benchmark |
 | `--log` | eval_progress.log | 进度日志 |
 
-<<<<<<< HEAD
-**参数优先级**：`--dry-run` > `--preflight` > 正式执行。即 `--dry-run --preflight` 只打印计划不执行。
-=======
+**参数优先级**：`--dry-run` > `--preflight` > `--quick` > 正式执行。
+
+**config.yaml 关键字段**：
 ```yaml
 model:
   name: <模型名称>           # 必填
@@ -294,7 +328,7 @@ model:
   api_base: <API地址>        # OpenAI 兼容 API
   api_key: <API密钥>         # 可选，默认 EMPTY
   thinking: false            # 是否为 thinking model（true/false/不设置=自动检测）
->>>>>>> 7fd1c566b849aa23cbbcd42dd3153a7081ffd214
+```
 
 **内部执行流程**：
 1. 加载 config.yaml 和 benchmark_registry.yaml
@@ -305,38 +339,19 @@ model:
 6. 正式执行：逐个（或并行）运行 benchmark，调度对应 runner
 7. 汇总结果，调用 report_generator 生成 JSON + Markdown 报告
 
-<<<<<<< HEAD
 ### tools/evalscope_runner.py — EvalScope 执行器
-=======
-# 标准模式生成配置（non-thinking benchmarks 使用）
-generation_config:
-  max_tokens: 8192
-  temperature: 0.0
-
-# Thinking 模式生成配置（model.thinking=true 且 benchmark.thinking=true 时使用）
-thinking_generation_config:
-  max_tokens: 30000
-  temperature: 0.6
-  top_p: 0.95
-  top_k: 20
-```
->>>>>>> 7fd1c566b849aa23cbbcd42dd3153a7081ffd214
 
 封装 EvalScope `TaskConfig` + `run_task` 调用。
 
-<<<<<<< HEAD
 关键行为：
 - 自动查询 `/v1/models` 获取 `max_model_len`，动态调整 `max_tokens`（预留 8K 给 prompt）
 - 支持 `dataset_dir` 本地缓存（离线评测）
 - 支持 `dataset_filters`（thinking 模型过滤 `</think>` 前内容）
 - 结果解析：将 EvalScope Report 对象转为 dict，递归提取 score
-=======
-定义每种模型类型对应的必测和可选 benchmark 列表，以及每个 benchmark 的执行器类型（evalscope / vlmeval / custom）、参数和 thinking 配置。
 
-**关键字段**：
+**关键字段**（benchmark_registry.yaml）：
 - `thinking: true/false` — 控制 thinking model 在该 benchmark 上是否启用 thinking 模式
 - `reference_scores` — 官方参考分数（用于报告中自动对比）
->>>>>>> 7fd1c566b849aa23cbbcd42dd3153a7081ffd214
 
 ### tools/vlmeval_runner.py — VLMEvalKit 执行器
 
@@ -402,126 +417,10 @@ VL benchmark 执行器。当模型通过 API 部署时，自动 fallback 到 eva
 | `vlmeval` | `vlmeval_runner.py` → VLMEvalKit 或 fallback | VL benchmark（API 部署时 fallback 到 evalscope） |
 | `custom` | 动态加载 `custom_eval/eval_*.py` | 自研评测脚本（LiveBench、TheoremQA、Robotics 等） |
 
-<<<<<<< HEAD
 自研脚本约定：
 - 导出 `evaluate_*()` 函数
 - 签名：`(config, logger=..., limit=..., [benchmark=..., dataset_path=...]) -> detail dict`
 - 返回标准 detail dict（`status` / `dataset` / `accuracy` / `rawDetails`）
-=======
-```bash
-CONTAINER=<container_name>
-docker cp skills/flagos-eval-comprehensive/tools/. $CONTAINER:/flagos-workspace/eval/
-```
-
-### 步骤 2：安装依赖
-
-```bash
-docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
-    pip install evalscope pandas pyarrow pyyaml requests"
-```
-
-> 如需 VLMEvalKit 后端：`pip install evalscope[vlmeval]`
-
-### 步骤 2.5：一站式 Benchmark 选择 + 数据集下载（推荐）
-
-使用 `benchmark_selector.py` 交互式选择 benchmark，自动下载数据集并启动评测：
-
-```bash
-# 推荐方式：交互式选择 + 自动下载 + 评测
-docker exec -it $CONTAINER bash -c "cd /flagos-workspace/eval && \
-    python benchmark_selector.py --config config.yaml"
-
-# 非交互：仅必测项，自动下载+评测
-docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
-    python benchmark_selector.py --config config.yaml --auto"
-
-# 非交互：全选
-docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
-    python benchmark_selector.py --config config.yaml --select all"
-
-# 仅下载数据集，不启动评测
-docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
-    python benchmark_selector.py --config config.yaml --auto --no-eval"
-```
-
-也可以手动预下载数据集：
-
-```bash
-# 预下载指定 benchmark 数据集
-docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
-    python dataset_prefetch.py --model-type LLM --benchmarks mmlu,aime24 --cache-dir datasets/evalscope_cache"
-
-# 预下载某类型全部数据集
-docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
-    python dataset_prefetch.py --model-type LLM --cache-dir datasets/evalscope_cache"
-
-# 检查缓存状态
-docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
-    python dataset_prefetch.py --model-type LLM --cache-dir datasets/evalscope_cache --status"
-```
-
-> 使用 HuggingFace 镜像源：`--source huggingface --hf-mirror https://hf-mirror.com`
-
-### 步骤 3：配置模型
-
-编辑 `/flagos-workspace/eval/config.yaml`：
-
-```bash
-cat /data/flagos-workspace/<model_name>/eval/config.yaml
-```
-
-**配置检查清单**：
-- [ ] `model.name` 正确
-- [ ] `model.type` 与模型类型匹配（LLM/VL/Omni/Robotics/ImageGen）
-- [ ] `model.api_base` 可达
-- [ ] thinking 模型配置（见下方 Thinking Model 决策指南）
-
-### 步骤 4：运行评测
-
-**全量评测**：
-```bash
-docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
-    nohup python eval_orchestrator.py --config config.yaml > /dev/null 2>&1 &"
-```
-
-**仅 EvalScope 原生 benchmark**：
-```bash
-docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
-    nohup python eval_orchestrator.py --config config.yaml --skip-custom > /dev/null 2>&1 &"
-```
-
-**指定 benchmark**：
-```bash
-docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
-    python eval_orchestrator.py --config config.yaml --benchmarks mmlu,aime24,gpqa_diamond"
-```
-
-**Dry-run（查看执行计划）**：
-```bash
-docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
-    python eval_orchestrator.py --config config.yaml --dry-run"
-```
-
-### 步骤 5：监控进度
-
-```bash
-# 全局进度
-tail -f /data/flagos-workspace/<model_name>/eval/eval_progress.log
-
-# 检查进程
-docker exec $CONTAINER ps aux | grep "eval_\|evalscope"
-```
-
-### 步骤 6：获取结果
-
-```bash
-# JSON 汇总报告
-cat /data/flagos-workspace/<model_name>/eval/eval_report.json
-
-# Markdown 可读报告
-cat /data/flagos-workspace/<model_name>/eval/eval_report.md
-```
->>>>>>> 7fd1c566b849aa23cbbcd42dd3153a7081ffd214
 
 ---
 

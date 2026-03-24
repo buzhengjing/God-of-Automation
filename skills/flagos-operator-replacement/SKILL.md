@@ -67,6 +67,8 @@ inspection:
   gpu_arch: <来自 pre-service-inspection>
 service:
   gems_txt_path: <来自 service-startup>
+  enable_oplist_path: <来自 service-startup>    # flaggems_enable_oplist.txt 路径（权威算子列表）
+  enable_oplist_count: <来自 service-startup>   # 当前生效算子数量
   initial_operator_list: <来自 service-startup>
 native_perf:
   output_throughput: <来自 performance-testing>
@@ -157,13 +159,13 @@ USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true VLLM_FL_PER_OP="rms_norm=vendor;atten
 
 | 场景 | 控制方式 | txt 文件角色 |
 |------|----------|-------------|
-| Plugin | `VLLM_FL_*` 环境变量 | 只读（验证生效） |
-| 非 plugin (yaml_config) | YAML exclude 配置文件 | 只读（验证生效） |
-| 非 plugin (only_enable) | `flag_gems.only_enable(include=[...])` | 只读（验证生效） |
-| 非 plugin (enable_unused) | `flag_gems.enable(unused=[...])` | 只读（验证生效） |
+| Plugin | `VLLM_FL_*` 环境变量 | **权威来源**（验证生效 + 读取实际算子列表） |
+| 非 plugin (yaml_config) | YAML exclude 配置文件 | **权威来源**（验证生效 + 读取实际算子列表） |
+| 非 plugin (only_enable) | `flag_gems.only_enable(include=[...])` | **权威来源**（验证生效 + 读取实际算子列表） |
+| 非 plugin (enable_unused) | `flag_gems.enable(unused=[...])` | **权威来源**（验证生效 + 读取实际算子列表） |
 | 非 plugin (兜底) | 直接写 txt 文件 | 读写 |
 
-**关键原则**：运行时 txt 文件优先作为只读的验证手段，不是控制手段。
+**核心原则**：`/tmp/flaggems_enable_oplist.txt` 是运行时自动生成的**唯一权威算子列表**。每次服务启动后 FlagGems 会重新生成此文件，内容反映 blacklist/whitelist 等配置生效后的实际算子集合。所有算子替换、搜索、对比操作必须以此文件为准，而非 API 枚举或静态文件。
 
 ## apply_op_config.py 使用方式
 

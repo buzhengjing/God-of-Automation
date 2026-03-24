@@ -5,6 +5,7 @@
 
 用法:
   python eval_orchestrator.py --config config.yaml
+  python eval_orchestrator.py --config config.yaml --quick
   python eval_orchestrator.py --config config.yaml --benchmarks mmlu,aime24
   python eval_orchestrator.py --config config.yaml --skip-custom --skip-optional
   python eval_orchestrator.py --config config.yaml --dry-run
@@ -362,6 +363,7 @@ def run_orchestrator(
     limit: Optional[int] = None,
     dry_run: bool = False,
     preflight: bool = False,
+    quick: bool = False,
     logger: Optional[ProgressLogger] = None,
 ) -> Dict:
     """
@@ -377,6 +379,7 @@ def run_orchestrator(
         limit: 样本数限制
         dry_run: 仅打印计划不执行
         preflight: 正式评测前用 limit=2 快速验证所有 benchmark
+        quick: Quick 模式，只跑 registry 中标记了 quick=true 的 benchmark
         logger: 日志器
 
     Returns:
@@ -404,6 +407,14 @@ def run_orchestrator(
     benchmarks = resolve_benchmarks(
         model_type, registry, skip_custom, skip_optional, only_benchmarks
     )
+
+    # Quick 模式：只跑标记了 quick=true 的 benchmark
+    if quick:
+        benchmarks = [b for b in benchmarks if b.get('quick', False)]
+        if not benchmarks:
+            logger.log("[ERROR] Quick mode: no benchmarks marked with quick=true in registry")
+            return {"error": "No quick benchmarks found"}
+        logger.log(f"[QUICK MODE] Running {len(benchmarks)} quick benchmark(s)")
 
     logger.log(f"Benchmarks to run: {len(benchmarks)}")
     for b in benchmarks:
@@ -551,6 +562,8 @@ Examples:
                         help='并行执行的 benchmark 数量 (default: 1)')
     parser.add_argument('--limit', type=int, default=None,
                         help='限制每个 benchmark 的样本数（调试用）')
+    parser.add_argument('--quick', action='store_true',
+                        help='Quick 模式：只跑标记了 quick=true 的 benchmark（迁移流程用）')
     parser.add_argument('--preflight', action='store_true',
                         help='正式评测前先用 limit=2 快速验证所有 benchmark')
     parser.add_argument('--dry-run', action='store_true',
@@ -600,6 +613,7 @@ Examples:
         limit=args.limit,
         dry_run=args.dry_run,
         preflight=args.preflight,
+        quick=args.quick,
         logger=logger,
     )
 
