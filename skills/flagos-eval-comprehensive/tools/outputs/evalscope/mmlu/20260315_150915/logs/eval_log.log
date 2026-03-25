@@ -1,0 +1,653 @@
+2026-03-15 15:09:15 - evalscope - INFO: Running with native backend
+2026-03-15 15:09:15 - evalscope - INFO: Dump task config to outputs/evalscope/mmlu/20260315_150915/configs/task_config.yaml
+2026-03-15 15:09:15 - evalscope - INFO: {
+    "model": "/nfs/models/Qwen3-8B/",
+    "model_id": "untitled",
+    "model_args": {},
+    "model_task": "text_generation",
+    "chat_template": null,
+    "datasets": [
+        "mmlu"
+    ],
+    "dataset_args": {
+        "mmlu": {
+            "name": "mmlu",
+            "dataset_id": "cais/mmlu",
+            "output_types": [
+                "generation"
+            ],
+            "subset_list": [
+                "abstract_algebra",
+                "anatomy",
+                "astronomy",
+                "business_ethics",
+                "clinical_knowledge",
+                "college_biology",
+                "college_chemistry",
+                "college_computer_science",
+                "college_mathematics",
+                "college_medicine",
+                "college_physics",
+                "computer_security",
+                "conceptual_physics",
+                "econometrics",
+                "electrical_engineering",
+                "elementary_mathematics",
+                "formal_logic",
+                "global_facts",
+                "high_school_biology",
+                "high_school_chemistry",
+                "high_school_computer_science",
+                "high_school_european_history",
+                "high_school_geography",
+                "high_school_government_and_politics",
+                "high_school_macroeconomics",
+                "high_school_mathematics",
+                "high_school_microeconomics",
+                "high_school_physics",
+                "high_school_psychology",
+                "high_school_statistics",
+                "high_school_us_history",
+                "high_school_world_history",
+                "human_aging",
+                "human_sexuality",
+                "international_law",
+                "jurisprudence",
+                "logical_fallacies",
+                "machine_learning",
+                "management",
+                "marketing",
+                "medical_genetics",
+                "miscellaneous",
+                "moral_disputes",
+                "moral_scenarios",
+                "nutrition",
+                "philosophy",
+                "prehistory",
+                "professional_accounting",
+                "professional_law",
+                "professional_medicine",
+                "professional_psychology",
+                "public_relations",
+                "security_studies",
+                "sociology",
+                "us_foreign_policy",
+                "virology",
+                "world_religions"
+            ],
+            "default_subset": "all",
+            "few_shot_num": 5,
+            "few_shot_random": false,
+            "train_split": "dev",
+            "eval_split": "test",
+            "prompt_template": "Answer the following multiple choice question. The last line of your response should be of the following format: 'ANSWER: [LETTER]' (without quotes) where [LETTER] is one of {letters}. Think step by step before answering.\n\n{question}\n\n{choices}",
+            "few_shot_prompt_template": null,
+            "system_prompt": null,
+            "query_template": null,
+            "pretty_name": "MMLU",
+            "description": "\n## Overview\n\nMMLU (Massive Multitask Language Understanding) is a comprehensive evaluation benchmark designed to measure knowledge acquired during pretraining. It covers 57 subjects across STEM, humanities, social sciences, and other domains, ranging from elementary to professional difficulty levels.\n\n## Task Description\n\n- **Task Type**: Multiple-Choice Question Answering\n- **Input**: Question with four answer choices (A, B, C, D)\n- **Output**: Single correct answer letter\n- **Subjects**: 57 subjects organized into 4 categories (STEM, Humanities, Social Sciences, Other)\n\n## Key Features\n\n- Covers diverse knowledge domains from elementary to advanced professional levels\n- Tests both factual knowledge and reasoning abilities\n- Includes subjects like abstract algebra, anatomy, astronomy, business ethics, and more\n- Standard benchmark for measuring LLM knowledge breadth\n\n## Evaluation Notes\n\n- Default configuration uses **5-shot** examples from the dev split\n- Supports Chain-of-Thought (CoT) prompting for improved reasoning\n- Results can be aggregated by subject or category (STEM, Humanities, Social Sciences, Other)\n- Use `subset_list` parameter to evaluate specific subjects\n",
+            "paper_url": null,
+            "data_statistics": null,
+            "sample_example": null,
+            "tags": [
+                "Knowledge",
+                "MCQ"
+            ],
+            "filters": null,
+            "metric_list": [
+                "acc"
+            ],
+            "aggregation": "mean",
+            "shuffle": false,
+            "shuffle_choices": false,
+            "force_redownload": false,
+            "review_timeout": null,
+            "extra_params": {},
+            "sandbox_config": {}
+        }
+    },
+    "dataset_dir": "/flagos-workspace/eval/datasets/evalscope_cache",
+    "dataset_hub": "modelscope",
+    "repeats": 1,
+    "generation_config": {
+        "timeout": 60000,
+        "batch_size": 64,
+        "stream": true,
+        "max_tokens": 8192,
+        "top_p": 1.0,
+        "temperature": 0.0,
+        "n": 1
+    },
+    "eval_type": "openai_api",
+    "eval_backend": "Native",
+    "eval_config": null,
+    "limit": null,
+    "eval_batch_size": 64,
+    "use_cache": null,
+    "rerun_review": false,
+    "work_dir": "outputs/evalscope/mmlu/20260315_150915",
+    "no_timestamp": false,
+    "enable_progress_tracker": false,
+    "ignore_errors": false,
+    "debug": false,
+    "seed": 42,
+    "api_url": "http://localhost:8000/v1",
+    "timeout": 60000,
+    "stream": true,
+    "judge_strategy": "auto",
+    "judge_worker_num": 1,
+    "judge_model_args": {},
+    "analysis_report": false,
+    "use_sandbox": false,
+    "sandbox_type": "docker",
+    "sandbox_manager_config": {},
+    "evalscope_version": "1.5.0"
+}
+2026-03-15 15:09:15 - evalscope - INFO: Start loading benchmark dataset: mmlu
+2026-03-15 15:09:16 - evalscope - INFO: Start evaluating 57 subsets of mmlu: ['abstract_algebra', 'anatomy', 'astronomy', 'business_ethics', 'clinical_knowledge', 'college_biology', 'college_chemistry', 'college_computer_science', 'college_mathematics', 'college_medicine', 'college_physics', 'computer_security', 'conceptual_physics', 'econometrics', 'electrical_engineering', 'elementary_mathematics', 'formal_logic', 'global_facts', 'high_school_biology', 'high_school_chemistry', 'high_school_computer_science', 'high_school_european_history', 'high_school_geography', 'high_school_government_and_politics', 'high_school_macroeconomics', 'high_school_mathematics', 'high_school_microeconomics', 'high_school_physics', 'high_school_psychology', 'high_school_statistics', 'high_school_us_history', 'high_school_world_history', 'human_aging', 'human_sexuality', 'international_law', 'jurisprudence', 'logical_fallacies', 'machine_learning', 'management', 'marketing', 'medical_genetics', 'miscellaneous', 'moral_disputes', 'moral_scenarios', 'nutrition', 'philosophy', 'prehistory', 'professional_accounting', 'professional_law', 'professional_medicine', 'professional_psychology', 'public_relations', 'security_studies', 'sociology', 'us_foreign_policy', 'virology', 'world_religions']
+2026-03-15 15:09:16 - evalscope - INFO: Unified pool: 14042 items to process, 0 already fully cached (14042 total across all subsets).
+2026-03-15 15:09:16 - evalscope - INFO: Loading model for prediction...
+2026-03-15 15:09:16 - evalscope - INFO: Creating model /nfs/models/Qwen3-8B/ with eval_type=openai_api base_url=http://localhost:8000/v1, config={'timeout': 60000, 'retries': 5, 'retry_interval': 10, 'batch_size': 64, 'stream': True, 'max_tokens': 8192, 'top_p': 1.0, 'temperature': 0.0, 'n': 1}, model_args={}
+2026-03-15 15:09:17 - evalscope - INFO: Model loaded successfully.
+2026-03-15 15:10:17 - evalscope - INFO: Evaluating[mmlu]   0%| 51/14042 [Elapsed: 01:00 < Remaining: 2:31:53,  1.54it/s]
+2026-03-15 15:11:18 - evalscope - INFO: Evaluating[mmlu]   1%| 145/14042 [Elapsed: 02:00 < Remaining: 2:34:01,  1.50it/s]
+2026-03-15 15:12:18 - evalscope - INFO: Evaluating[mmlu]   2%| 255/14042 [Elapsed: 03:01 < Remaining: 2:33:04,  1.50it/s]
+2026-03-15 15:13:19 - evalscope - INFO: Evaluating[mmlu]   3%| 382/14042 [Elapsed: 04:02 < Remaining: 1:19:48,  2.85it/s]
+2026-03-15 15:14:20 - evalscope - INFO: Evaluating[mmlu]   3%| 486/14042 [Elapsed: 05:03 < Remaining: 2:21:03,  1.60it/s]
+2026-03-15 15:15:21 - evalscope - INFO: Evaluating[mmlu]   4%| 613/14042 [Elapsed: 06:03 < Remaining: 1:53:54,  1.96it/s]
+2026-03-15 15:16:22 - evalscope - INFO: Evaluating[mmlu]   5%| 735/14042 [Elapsed: 07:04 < Remaining: 2:04:17,  1.78it/s]
+2026-03-15 15:17:22 - evalscope - INFO: Evaluating[mmlu]   6%| 839/14042 [Elapsed: 08:05 < Remaining: 2:19:00,  1.58it/s]
+2026-03-15 15:18:22 - evalscope - INFO: Evaluating[mmlu]   6%| 912/14042 [Elapsed: 09:05 < Remaining: 3:51:57,  1.06s/it]
+2026-03-15 15:19:23 - evalscope - INFO: Evaluating[mmlu]   7%| 957/14042 [Elapsed: 10:06 < Remaining: 3:24:03,  1.07it/s]
+2026-03-15 15:20:25 - evalscope - INFO: Evaluating[mmlu]   7%| 991/14042 [Elapsed: 11:08 < Remaining: 7:18:57,  2.02s/it]
+2026-03-15 15:21:26 - evalscope - INFO: Evaluating[mmlu]   7%| 1029/14042 [Elapsed: 12:09 < Remaining: 5:54:11,  1.63s/it]
+2026-03-15 15:22:26 - evalscope - INFO: Evaluating[mmlu]   8%| 1063/14042 [Elapsed: 13:09 < Remaining: 8:18:09,  2.30s/it]
+2026-03-15 15:23:26 - evalscope - INFO: Evaluating[mmlu]   8%| 1090/14042 [Elapsed: 14:09 < Remaining: 9:23:56,  2.61s/it]
+2026-03-15 15:24:27 - evalscope - INFO: Evaluating[mmlu]   8%| 1122/14042 [Elapsed: 15:10 < Remaining: 7:27:56,  2.08s/it]
+2026-03-15 15:25:28 - evalscope - INFO: Evaluating[mmlu]   8%| 1148/14042 [Elapsed: 16:11 < Remaining: 6:41:38,  1.87s/it]
+2026-03-15 15:26:28 - evalscope - INFO: Evaluating[mmlu]   9%| 1202/14042 [Elapsed: 17:11 < Remaining: 3:23:43,  1.05it/s]
+2026-03-15 15:27:29 - evalscope - INFO: Evaluating[mmlu]   9%| 1263/14042 [Elapsed: 18:12 < Remaining: 2:03:55,  1.72it/s]
+2026-03-15 15:28:30 - evalscope - INFO: Evaluating[mmlu]  10%| 1338/14042 [Elapsed: 19:13 < Remaining: 2:30:19,  1.41it/s]
+2026-03-15 15:29:31 - evalscope - INFO: Evaluating[mmlu]  10%| 1393/14042 [Elapsed: 20:14 < Remaining: 4:41:05,  1.33s/it]
+2026-03-15 15:30:31 - evalscope - INFO: Evaluating[mmlu]  10%| 1460/14042 [Elapsed: 21:14 < Remaining: 2:51:13,  1.22it/s]
+2026-03-15 15:31:32 - evalscope - INFO: Evaluating[mmlu]  11%| 1536/14042 [Elapsed: 22:15 < Remaining: 2:59:39,  1.16it/s]
+2026-03-15 15:32:33 - evalscope - INFO: Evaluating[mmlu]  12%| 1629/14042 [Elapsed: 23:15 < Remaining: 2:23:33,  1.44it/s]
+2026-03-15 15:33:33 - evalscope - INFO: Evaluating[mmlu]  12%| 1747/14042 [Elapsed: 24:16 < Remaining: 1:35:55,  2.14it/s]
+2026-03-15 15:34:33 - evalscope - INFO: Evaluating[mmlu]  13%| 1831/14042 [Elapsed: 25:16 < Remaining: 2:21:34,  1.44it/s]
+2026-03-15 15:35:34 - evalscope - INFO: Evaluating[mmlu]  13%| 1876/14042 [Elapsed: 26:17 < Remaining: 3:34:28,  1.06s/it]
+2026-03-15 15:36:34 - evalscope - INFO: Evaluating[mmlu]  14%| 1950/14042 [Elapsed: 27:17 < Remaining: 2:42:46,  1.24it/s]
+2026-03-15 15:37:34 - evalscope - INFO: Evaluating[mmlu]  14%| 2028/14042 [Elapsed: 28:17 < Remaining: 1:57:12,  1.71it/s]
+2026-03-15 15:38:35 - evalscope - INFO: Evaluating[mmlu]  15%| 2116/14042 [Elapsed: 29:17 < Remaining: 2:28:41,  1.34it/s]
+2026-03-15 15:39:35 - evalscope - INFO: Evaluating[mmlu]  16%| 2231/14042 [Elapsed: 30:18 < Remaining: 1:29:40,  2.20it/s]
+2026-03-15 15:40:36 - evalscope - INFO: Evaluating[mmlu]  17%| 2355/14042 [Elapsed: 31:19 < Remaining: 58:43,  3.32it/s]
+2026-03-15 15:41:36 - evalscope - INFO: Evaluating[mmlu]  17%| 2452/14042 [Elapsed: 32:19 < Remaining: 2:26:56,  1.31it/s]
+2026-03-15 15:42:36 - evalscope - INFO: Evaluating[mmlu]  18%| 2527/14042 [Elapsed: 33:19 < Remaining: 2:24:40,  1.33it/s]
+2026-03-15 15:43:36 - evalscope - INFO: Evaluating[mmlu]  19%| 2601/14042 [Elapsed: 34:19 < Remaining: 1:44:26,  1.83it/s]
+2026-03-15 15:44:37 - evalscope - INFO: Evaluating[mmlu]  19%| 2724/14042 [Elapsed: 35:20 < Remaining: 1:21:52,  2.30it/s]
+2026-03-15 15:45:38 - evalscope - INFO: Evaluating[mmlu]  20%| 2858/14042 [Elapsed: 36:20 < Remaining: 1:26:31,  2.15it/s]
+2026-03-15 15:46:38 - evalscope - INFO: Evaluating[mmlu]  21%| 2965/14042 [Elapsed: 37:21 < Remaining: 3:05:35,  1.01s/it]
+2026-03-15 15:47:38 - evalscope - INFO: Evaluating[mmlu]  22%| 3036/14042 [Elapsed: 38:21 < Remaining: 3:15:52,  1.07s/it]
+2026-03-15 15:48:39 - evalscope - INFO: Evaluating[mmlu]  22%| 3093/14042 [Elapsed: 39:21 < Remaining: 1:39:24,  1.84it/s]
+2026-03-15 15:49:39 - evalscope - INFO: Evaluating[mmlu]  22%| 3147/14042 [Elapsed: 40:21 < Remaining: 2:42:16,  1.12it/s]
+2026-03-15 15:50:40 - evalscope - INFO: Evaluating[mmlu]  23%| 3233/14042 [Elapsed: 41:22 < Remaining: 1:52:06,  1.61it/s]
+2026-03-15 15:51:40 - evalscope - INFO: Evaluating[mmlu]  24%| 3314/14042 [Elapsed: 42:23 < Remaining: 1:34:05,  1.90it/s]
+2026-03-15 15:52:41 - evalscope - INFO: Evaluating[mmlu]  24%| 3401/14042 [Elapsed: 43:24 < Remaining: 1:16:34,  2.32it/s]
+2026-03-15 15:53:41 - evalscope - INFO: Evaluating[mmlu]  25%| 3529/14042 [Elapsed: 44:24 < Remaining: 1:03:13,  2.77it/s]
+2026-03-15 15:54:42 - evalscope - INFO: Evaluating[mmlu]  26%| 3661/14042 [Elapsed: 45:24 < Remaining: 1:09:31,  2.49it/s]
+2026-03-15 15:55:42 - evalscope - INFO: Evaluating[mmlu]  27%| 3796/14042 [Elapsed: 46:25 < Remaining: 1:33:33,  1.83it/s]
+2026-03-15 15:56:42 - evalscope - INFO: Evaluating[mmlu]  28%| 3903/14042 [Elapsed: 47:25 < Remaining: 1:36:12,  1.76it/s]
+2026-03-15 15:57:42 - evalscope - INFO: Evaluating[mmlu]  29%| 4007/14042 [Elapsed: 48:25 < Remaining: 1:55:07,  1.45it/s]
+2026-03-15 15:58:43 - evalscope - INFO: Evaluating[mmlu]  29%| 4108/14042 [Elapsed: 49:26 < Remaining: 48:28,  3.42it/s]
+2026-03-15 15:59:43 - evalscope - INFO: Evaluating[mmlu]  30%| 4199/14042 [Elapsed: 50:26 < Remaining: 2:37:26,  1.04it/s]
+2026-03-15 16:00:43 - evalscope - INFO: Evaluating[mmlu]  30%| 4239/14042 [Elapsed: 51:26 < Remaining: 5:10:13,  1.90s/it]
+2026-03-15 16:01:43 - evalscope - INFO: Evaluating[mmlu]  31%| 4298/14042 [Elapsed: 52:26 < Remaining: 2:19:21,  1.17it/s]
+2026-03-15 16:02:43 - evalscope - INFO: Evaluating[mmlu]  31%| 4330/14042 [Elapsed: 53:26 < Remaining: 6:04:51,  2.25s/it]
+2026-03-15 16:03:44 - evalscope - INFO: Evaluating[mmlu]  31%| 4375/14042 [Elapsed: 54:27 < Remaining: 2:49:20,  1.05s/it]
+2026-03-15 16:04:44 - evalscope - INFO: Evaluating[mmlu]  31%| 4416/14042 [Elapsed: 55:27 < Remaining: 2:35:29,  1.03it/s]
+2026-03-15 16:05:45 - evalscope - INFO: Evaluating[mmlu]  32%| 4450/14042 [Elapsed: 56:28 < Remaining: 4:10:20,  1.57s/it]
+2026-03-15 16:06:46 - evalscope - INFO: Evaluating[mmlu]  32%| 4507/14042 [Elapsed: 57:29 < Remaining: 1:38:18,  1.62it/s]
+2026-03-15 16:07:47 - evalscope - INFO: Evaluating[mmlu]  33%| 4584/14042 [Elapsed: 58:30 < Remaining: 1:56:49,  1.35it/s]
+2026-03-15 16:08:48 - evalscope - INFO: Evaluating[mmlu]  33%| 4677/14042 [Elapsed: 59:30 < Remaining: 1:46:32,  1.46it/s]
+2026-03-15 16:09:48 - evalscope - INFO: Evaluating[mmlu]  34%| 4742/14042 [Elapsed: 1:00:31 < Remaining: 1:35:03,  1.63it/s]
+2026-03-15 16:10:49 - evalscope - INFO: Evaluating[mmlu]  34%| 4803/14042 [Elapsed: 1:01:32 < Remaining: 3:23:04,  1.32s/it]
+2026-03-15 16:11:49 - evalscope - INFO: Evaluating[mmlu]  35%| 4876/14042 [Elapsed: 1:02:32 < Remaining: 1:10:59,  2.15it/s]
+2026-03-15 16:12:49 - evalscope - INFO: Evaluating[mmlu]  36%| 4988/14042 [Elapsed: 1:03:32 < Remaining: 1:03:18,  2.38it/s]
+2026-03-15 16:13:50 - evalscope - INFO: Evaluating[mmlu]  36%| 5096/14042 [Elapsed: 1:04:33 < Remaining: 1:13:35,  2.03it/s]
+2026-03-15 16:14:51 - evalscope - INFO: Evaluating[mmlu]  37%| 5225/14042 [Elapsed: 1:05:34 < Remaining: 59:19,  2.48it/s]
+2026-03-15 16:15:51 - evalscope - INFO: Evaluating[mmlu]  38%| 5353/14042 [Elapsed: 1:06:34 < Remaining: 1:12:42,  1.99it/s]
+2026-03-15 16:16:52 - evalscope - INFO: Evaluating[mmlu]  39%| 5457/14042 [Elapsed: 1:07:34 < Remaining: 1:34:00,  1.52it/s]
+2026-03-15 16:17:52 - evalscope - INFO: Evaluating[mmlu]  39%| 5531/14042 [Elapsed: 1:08:35 < Remaining: 2:34:16,  1.09s/it]
+2026-03-15 16:18:52 - evalscope - INFO: Evaluating[mmlu]  40%| 5601/14042 [Elapsed: 1:09:35 < Remaining: 1:34:08,  1.49it/s]
+2026-03-15 16:19:53 - evalscope - INFO: Evaluating[mmlu]  40%| 5678/14042 [Elapsed: 1:10:36 < Remaining: 1:18:41,  1.77it/s]
+2026-03-15 16:20:54 - evalscope - INFO: Evaluating[mmlu]  41%| 5762/14042 [Elapsed: 1:11:37 < Remaining: 1:42:21,  1.35it/s]
+2026-03-15 16:21:55 - evalscope - INFO: Evaluating[mmlu]  42%| 5854/14042 [Elapsed: 1:12:38 < Remaining: 1:30:20,  1.51it/s]
+2026-03-15 16:22:55 - evalscope - INFO: Evaluating[mmlu]  42%| 5952/14042 [Elapsed: 1:13:38 < Remaining: 1:16:43,  1.76it/s]
+2026-03-15 16:23:55 - evalscope - INFO: Evaluating[mmlu]  43%| 6044/14042 [Elapsed: 1:14:38 < Remaining: 1:20:58,  1.65it/s]
+2026-03-15 16:24:56 - evalscope - INFO: Evaluating[mmlu]  44%| 6139/14042 [Elapsed: 1:15:38 < Remaining: 1:29:37,  1.47it/s]
+2026-03-15 16:25:56 - evalscope - INFO: Evaluating[mmlu]  45%| 6259/14042 [Elapsed: 1:16:39 < Remaining: 47:22,  2.74it/s]
+2026-03-15 16:26:56 - evalscope - INFO: Evaluating[mmlu]  45%| 6376/14042 [Elapsed: 1:17:39 < Remaining: 1:11:36,  1.78it/s]
+2026-03-15 16:27:56 - evalscope - INFO: Evaluating[mmlu]  46%| 6483/14042 [Elapsed: 1:18:39 < Remaining: 1:01:03,  2.06it/s]
+2026-03-15 16:28:57 - evalscope - INFO: Evaluating[mmlu]  47%| 6591/14042 [Elapsed: 1:19:40 < Remaining: 51:16,  2.42it/s]
+2026-03-15 16:29:58 - evalscope - INFO: Evaluating[mmlu]  48%| 6698/14042 [Elapsed: 1:20:40 < Remaining: 57:11,  2.14it/s]
+2026-03-15 16:30:58 - evalscope - INFO: Evaluating[mmlu]  48%| 6787/14042 [Elapsed: 1:21:41 < Remaining: 1:17:19,  1.56it/s]
+2026-03-15 16:31:59 - evalscope - INFO: Evaluating[mmlu]  49%| 6867/14042 [Elapsed: 1:22:41 < Remaining: 1:49:01,  1.10it/s]
+2026-03-15 16:32:59 - evalscope - INFO: Evaluating[mmlu]  50%| 6975/14042 [Elapsed: 1:23:42 < Remaining: 47:23,  2.49it/s]
+2026-03-15 16:33:59 - evalscope - INFO: Evaluating[mmlu]  51%| 7099/14042 [Elapsed: 1:24:42 < Remaining: 1:01:08,  1.89it/s]
+2026-03-15 16:34:59 - evalscope - INFO: Evaluating[mmlu]  52%| 7250/14042 [Elapsed: 1:25:42 < Remaining: 42:59,  2.63it/s]
+2026-03-15 16:36:00 - evalscope - INFO: Evaluating[mmlu]  52%| 7360/14042 [Elapsed: 1:26:43 < Remaining: 1:02:17,  1.79it/s]
+2026-03-15 16:37:01 - evalscope - INFO: Evaluating[mmlu]  53%| 7507/14042 [Elapsed: 1:27:44 < Remaining: 38:04,  2.86it/s]
+2026-03-15 16:38:01 - evalscope - INFO: Evaluating[mmlu]  55%| 7686/14042 [Elapsed: 1:28:44 < Remaining: 42:15,  2.51it/s]
+2026-03-15 16:39:02 - evalscope - INFO: Evaluating[mmlu]  56%| 7844/14042 [Elapsed: 1:29:45 < Remaining: 37:07,  2.78it/s]
+2026-03-15 16:40:03 - evalscope - INFO: Evaluating[mmlu]  57%| 7991/14042 [Elapsed: 1:30:46 < Remaining: 48:18,  2.09it/s]
+2026-03-15 16:41:03 - evalscope - INFO: Evaluating[mmlu]  58%| 8135/14042 [Elapsed: 1:31:46 < Remaining: 1:00:31,  1.63it/s]
+2026-03-15 16:42:04 - evalscope - INFO: Evaluating[mmlu]  59%| 8232/14042 [Elapsed: 1:32:47 < Remaining: 44:43,  2.17it/s]
+2026-03-15 16:43:04 - evalscope - INFO: Evaluating[mmlu]  59%| 8340/14042 [Elapsed: 1:33:47 < Remaining: 43:37,  2.18it/s]
+2026-03-15 16:44:04 - evalscope - INFO: Evaluating[mmlu]  60%| 8457/14042 [Elapsed: 1:34:47 < Remaining: 44:21,  2.10it/s]
+2026-03-15 16:45:05 - evalscope - INFO: Evaluating[mmlu]  61%| 8541/14042 [Elapsed: 1:35:47 < Remaining: 1:20:19,  1.14it/s]
+2026-03-15 16:46:06 - evalscope - INFO: Evaluating[mmlu]  61%| 8605/14042 [Elapsed: 1:36:48 < Remaining: 1:14:37,  1.21it/s]
+2026-03-15 16:47:06 - evalscope - INFO: Evaluating[mmlu]  62%| 8676/14042 [Elapsed: 1:37:49 < Remaining: 1:26:50,  1.03it/s]
+2026-03-15 16:48:06 - evalscope - INFO: Evaluating[mmlu]  62%| 8756/14042 [Elapsed: 1:38:49 < Remaining: 1:18:00,  1.13it/s]
+2026-03-15 16:49:07 - evalscope - INFO: Evaluating[mmlu]  63%| 8826/14042 [Elapsed: 1:39:50 < Remaining: 1:59:44,  1.38s/it]
+2026-03-15 16:50:08 - evalscope - INFO: Evaluating[mmlu]  63%| 8899/14042 [Elapsed: 1:40:51 < Remaining: 1:11:12,  1.20it/s]
+2026-03-15 16:51:09 - evalscope - INFO: Evaluating[mmlu]  64%| 8969/14042 [Elapsed: 1:41:52 < Remaining: 1:00:34,  1.40it/s]
+2026-03-15 16:52:09 - evalscope - INFO: Evaluating[mmlu]  64%| 9028/14042 [Elapsed: 1:42:52 < Remaining: 1:03:41,  1.31it/s]
+2026-03-15 16:53:10 - evalscope - INFO: Evaluating[mmlu]  65%| 9095/14042 [Elapsed: 1:43:53 < Remaining: 1:45:17,  1.28s/it]
+2026-03-15 16:54:10 - evalscope - INFO: Evaluating[mmlu]  65%| 9167/14042 [Elapsed: 1:44:53 < Remaining: 1:09:17,  1.17it/s]
+2026-03-15 16:55:10 - evalscope - INFO: Evaluating[mmlu]  66%| 9222/14042 [Elapsed: 1:45:53 < Remaining: 2:02:54,  1.53s/it]
+2026-03-15 16:56:11 - evalscope - INFO: Evaluating[mmlu]  66%| 9319/14042 [Elapsed: 1:46:54 < Remaining: 50:25,  1.56it/s]
+2026-03-15 16:57:12 - evalscope - INFO: Evaluating[mmlu]  67%| 9400/14042 [Elapsed: 1:47:55 < Remaining: 38:36,  2.00it/s]
+2026-03-15 16:58:12 - evalscope - INFO: Evaluating[mmlu]  68%| 9496/14042 [Elapsed: 1:48:55 < Remaining: 1:05:37,  1.15it/s]
+2026-03-15 16:59:12 - evalscope - INFO: Evaluating[mmlu]  68%| 9586/14042 [Elapsed: 1:49:55 < Remaining: 58:42,  1.27it/s]
+2026-03-15 17:00:12 - evalscope - INFO: Evaluating[mmlu]  69%| 9664/14042 [Elapsed: 1:50:55 < Remaining: 1:05:05,  1.12it/s]
+2026-03-15 17:01:12 - evalscope - INFO: Evaluating[mmlu]  70%| 9763/14042 [Elapsed: 1:51:55 < Remaining: 47:08,  1.51it/s]
+2026-03-15 17:02:13 - evalscope - INFO: Evaluating[mmlu]  70%| 9865/14042 [Elapsed: 1:52:55 < Remaining: 45:36,  1.53it/s]
+2026-03-15 17:03:13 - evalscope - INFO: Evaluating[mmlu]  71%| 9948/14042 [Elapsed: 1:53:56 < Remaining: 43:46,  1.56it/s]
+2026-03-15 17:04:14 - evalscope - INFO: Evaluating[mmlu]  72%| 10056/14042 [Elapsed: 1:54:57 < Remaining: 56:30,  1.18it/s]
+2026-03-15 17:05:14 - evalscope - INFO: Evaluating[mmlu]  72%| 10179/14042 [Elapsed: 1:55:57 < Remaining: 40:28,  1.59it/s]
+2026-03-15 17:06:15 - evalscope - INFO: Evaluating[mmlu]  73%| 10292/14042 [Elapsed: 1:56:58 < Remaining: 31:49,  1.96it/s]
+2026-03-15 17:07:16 - evalscope - INFO: Evaluating[mmlu]  74%| 10388/14042 [Elapsed: 1:57:59 < Remaining: 27:27,  2.22it/s]
+2026-03-15 17:08:16 - evalscope - INFO: Evaluating[mmlu]  74%| 10460/14042 [Elapsed: 1:58:59 < Remaining: 50:36,  1.18it/s]
+2026-03-15 17:09:17 - evalscope - INFO: Evaluating[mmlu]  75%| 10525/14042 [Elapsed: 2:00:00 < Remaining: 1:08:41,  1.17s/it]
+2026-03-15 17:10:18 - evalscope - INFO: Evaluating[mmlu]  75%| 10581/14042 [Elapsed: 2:01:00 < Remaining: 1:02:53,  1.09s/it]
+2026-03-15 17:11:18 - evalscope - INFO: Evaluating[mmlu]  76%| 10617/14042 [Elapsed: 2:02:01 < Remaining: 1:47:26,  1.88s/it]
+2026-03-15 17:12:19 - evalscope - INFO: Evaluating[mmlu]  76%| 10644/14042 [Elapsed: 2:03:02 < Remaining: 2:39:42,  2.82s/it]
+2026-03-15 17:13:19 - evalscope - INFO: Evaluating[mmlu]  76%| 10676/14042 [Elapsed: 2:04:02 < Remaining: 1:47:45,  1.92s/it]
+2026-03-15 17:14:20 - evalscope - INFO: Evaluating[mmlu]  76%| 10719/14042 [Elapsed: 2:05:03 < Remaining: 46:40,  1.19it/s]
+2026-03-15 17:15:21 - evalscope - INFO: Evaluating[mmlu]  77%| 10750/14042 [Elapsed: 2:06:04 < Remaining: 58:24,  1.06s/it]
+2026-03-15 17:16:22 - evalscope - INFO: Evaluating[mmlu]  77%| 10777/14042 [Elapsed: 2:07:05 < Remaining: 2:45:31,  3.04s/it]
+2026-03-15 17:17:23 - evalscope - INFO: Evaluating[mmlu]  77%| 10818/14042 [Elapsed: 2:08:06 < Remaining: 1:38:24,  1.83s/it]
+2026-03-15 17:18:23 - evalscope - INFO: Evaluating[mmlu]  77%| 10848/14042 [Elapsed: 2:09:06 < Remaining: 1:33:23,  1.75s/it]
+2026-03-15 17:19:24 - evalscope - INFO: Evaluating[mmlu]  77%| 10874/14042 [Elapsed: 2:10:06 < Remaining: 1:00:51,  1.15s/it]
+2026-03-15 17:20:24 - evalscope - INFO: Evaluating[mmlu]  78%| 10910/14042 [Elapsed: 2:11:07 < Remaining: 59:08,  1.13s/it]
+2026-03-15 17:21:25 - evalscope - INFO: Evaluating[mmlu]  78%| 10944/14042 [Elapsed: 2:12:08 < Remaining: 1:33:33,  1.81s/it]
+2026-03-15 17:22:26 - evalscope - INFO: Evaluating[mmlu]  78%| 10981/14042 [Elapsed: 2:13:08 < Remaining: 1:33:51,  1.84s/it]
+2026-03-15 17:23:26 - evalscope - INFO: Evaluating[mmlu]  78%| 11009/14042 [Elapsed: 2:14:09 < Remaining: 1:53:23,  2.24s/it]
+2026-03-15 17:24:26 - evalscope - INFO: Evaluating[mmlu]  79%| 11053/14042 [Elapsed: 2:15:09 < Remaining: 41:26,  1.20it/s]
+2026-03-15 17:25:27 - evalscope - INFO: Evaluating[mmlu]  79%| 11083/14042 [Elapsed: 2:16:10 < Remaining: 1:39:01,  2.01s/it]
+2026-03-15 17:26:28 - evalscope - INFO: Evaluating[mmlu]  79%| 11119/14042 [Elapsed: 2:17:10 < Remaining: 1:20:20,  1.65s/it]
+2026-03-15 17:27:28 - evalscope - INFO: Evaluating[mmlu]  79%| 11151/14042 [Elapsed: 2:18:11 < Remaining: 1:10:15,  1.46s/it]
+2026-03-15 17:28:28 - evalscope - INFO: Evaluating[mmlu]  80%| 11179/14042 [Elapsed: 2:19:11 < Remaining: 1:35:44,  2.01s/it]
+2026-03-15 17:29:28 - evalscope - INFO: Evaluating[mmlu]  80%| 11205/14042 [Elapsed: 2:20:11 < Remaining: 1:09:14,  1.46s/it]
+2026-03-15 17:30:29 - evalscope - INFO: Evaluating[mmlu]  80%| 11232/14042 [Elapsed: 2:21:12 < Remaining: 1:42:24,  2.19s/it]
+2026-03-15 17:31:30 - evalscope - INFO: Evaluating[mmlu]  80%| 11263/14042 [Elapsed: 2:22:13 < Remaining: 52:41,  1.14s/it]
+2026-03-15 17:32:31 - evalscope - INFO: Evaluating[mmlu]  80%| 11292/14042 [Elapsed: 2:23:13 < Remaining: 1:20:54,  1.77s/it]
+2026-03-15 17:33:31 - evalscope - INFO: Evaluating[mmlu]  81%| 11330/14042 [Elapsed: 2:24:14 < Remaining: 49:24,  1.09s/it]
+2026-03-15 17:34:31 - evalscope - INFO: Evaluating[mmlu]  81%| 11354/14042 [Elapsed: 2:25:14 < Remaining: 2:00:56,  2.70s/it]
+2026-03-15 17:35:32 - evalscope - INFO: Evaluating[mmlu]  81%| 11385/14042 [Elapsed: 2:26:15 < Remaining: 1:20:36,  1.82s/it]
+2026-03-15 17:36:33 - evalscope - INFO: Evaluating[mmlu]  81%| 11425/14042 [Elapsed: 2:27:15 < Remaining: 49:17,  1.13s/it]
+2026-03-15 17:37:33 - evalscope - INFO: Evaluating[mmlu]  82%| 11454/14042 [Elapsed: 2:28:16 < Remaining: 1:14:30,  1.73s/it]
+2026-03-15 17:38:34 - evalscope - INFO: Evaluating[mmlu]  82%| 11488/14042 [Elapsed: 2:29:17 < Remaining: 1:07:08,  1.58s/it]
+2026-03-15 17:39:34 - evalscope - INFO: Evaluating[mmlu]  82%| 11518/14042 [Elapsed: 2:30:17 < Remaining: 1:30:21,  2.15s/it]
+2026-03-15 17:40:35 - evalscope - INFO: Evaluating[mmlu]  82%| 11554/14042 [Elapsed: 2:31:17 < Remaining: 1:04:55,  1.57s/it]
+2026-03-15 17:41:35 - evalscope - INFO: Evaluating[mmlu]  83%| 11587/14042 [Elapsed: 2:32:18 < Remaining: 1:50:27,  2.70s/it]
+2026-03-15 17:42:35 - evalscope - INFO: Evaluating[mmlu]  83%| 11620/14042 [Elapsed: 2:33:18 < Remaining: 43:04,  1.07s/it]
+2026-03-15 17:43:36 - evalscope - INFO: Evaluating[mmlu]  83%| 11649/14042 [Elapsed: 2:34:19 < Remaining: 1:42:53,  2.58s/it]
+2026-03-15 17:44:37 - evalscope - INFO: Evaluating[mmlu]  83%| 11678/14042 [Elapsed: 2:35:19 < Remaining: 1:07:09,  1.70s/it]
+2026-03-15 17:45:37 - evalscope - INFO: Evaluating[mmlu]  83%| 11715/14042 [Elapsed: 2:36:20 < Remaining: 1:19:02,  2.04s/it]
+2026-03-15 17:46:39 - evalscope - INFO: Evaluating[mmlu]  84%| 11752/14042 [Elapsed: 2:37:22 < Remaining: 1:53:25,  2.97s/it]
+2026-03-15 17:47:40 - evalscope - INFO: Evaluating[mmlu]  84%| 11792/14042 [Elapsed: 2:38:22 < Remaining: 52:48,  1.41s/it]
+2026-03-15 17:48:40 - evalscope - INFO: Evaluating[mmlu]  84%| 11828/14042 [Elapsed: 2:39:23 < Remaining: 1:30:42,  2.46s/it]
+2026-03-15 17:49:40 - evalscope - INFO: Evaluating[mmlu]  85%| 11868/14042 [Elapsed: 2:40:23 < Remaining: 43:39,  1.21s/it]
+2026-03-15 17:50:41 - evalscope - INFO: Evaluating[mmlu]  85%| 11904/14042 [Elapsed: 2:41:24 < Remaining: 1:03:36,  1.78s/it]
+2026-03-15 17:51:42 - evalscope - INFO: Evaluating[mmlu]  85%| 11937/14042 [Elapsed: 2:42:24 < Remaining: 1:19:59,  2.28s/it]
+2026-03-15 17:52:42 - evalscope - INFO: Evaluating[mmlu]  85%| 11968/14042 [Elapsed: 2:43:25 < Remaining: 43:40,  1.26s/it]
+2026-03-15 17:53:43 - evalscope - INFO: Evaluating[mmlu]  85%| 12001/14042 [Elapsed: 2:44:25 < Remaining: 1:07:15,  1.98s/it]
+2026-03-15 17:54:43 - evalscope - INFO: Evaluating[mmlu]  86%| 12032/14042 [Elapsed: 2:45:26 < Remaining: 50:31,  1.51s/it]
+2026-03-15 17:55:44 - evalscope - INFO: Evaluating[mmlu]  86%| 12060/14042 [Elapsed: 2:46:27 < Remaining: 1:23:23,  2.52s/it]
+2026-03-15 17:56:44 - evalscope - INFO: Evaluating[mmlu]  86%| 12092/14042 [Elapsed: 2:47:27 < Remaining: 43:24,  1.34s/it]
+2026-03-15 17:57:44 - evalscope - INFO: Evaluating[mmlu]  86%| 12137/14042 [Elapsed: 2:48:27 < Remaining: 25:02,  1.27it/s]
+2026-03-15 17:58:45 - evalscope - INFO: Evaluating[mmlu]  87%| 12186/14042 [Elapsed: 2:49:28 < Remaining: 44:06,  1.43s/it]
+2026-03-15 17:59:46 - evalscope - INFO: Evaluating[mmlu]  87%| 12271/14042 [Elapsed: 2:50:29 < Remaining: 18:10,  1.62it/s]
+2026-03-15 18:00:46 - evalscope - INFO: Evaluating[mmlu]  88%| 12340/14042 [Elapsed: 2:51:29 < Remaining: 24:28,  1.16it/s]
+2026-03-15 18:01:47 - evalscope - INFO: Evaluating[mmlu]  88%| 12412/14042 [Elapsed: 2:52:30 < Remaining: 18:09,  1.50it/s]
+2026-03-15 18:02:47 - evalscope - INFO: Evaluating[mmlu]  89%| 12493/14042 [Elapsed: 2:53:30 < Remaining: 13:01,  1.98it/s]
+2026-03-15 18:03:48 - evalscope - INFO: Evaluating[mmlu]  90%| 12606/14042 [Elapsed: 2:54:31 < Remaining: 13:00,  1.84it/s]
+2026-03-15 18:04:48 - evalscope - INFO: Evaluating[mmlu]  90%| 12703/14042 [Elapsed: 2:55:31 < Remaining: 14:50,  1.50it/s]
+2026-03-15 18:05:49 - evalscope - INFO: Evaluating[mmlu]  91%| 12797/14042 [Elapsed: 2:56:31 < Remaining: 10:39,  1.95it/s]
+2026-03-15 18:06:49 - evalscope - INFO: Evaluating[mmlu]  92%| 12912/14042 [Elapsed: 2:57:32 < Remaining: 07:56,  2.37it/s]
+2026-03-15 18:07:50 - evalscope - INFO: Evaluating[mmlu]  93%| 13030/14042 [Elapsed: 2:58:32 < Remaining: 06:27,  2.61it/s]
+2026-03-15 18:08:50 - evalscope - INFO: Evaluating[mmlu]  94%| 13143/14042 [Elapsed: 2:59:33 < Remaining: 09:07,  1.64it/s]
+2026-03-15 18:09:50 - evalscope - INFO: Evaluating[mmlu]  94%| 13231/14042 [Elapsed: 3:00:33 < Remaining: 10:46,  1.25it/s]
+2026-03-15 18:10:50 - evalscope - INFO: Evaluating[mmlu]  95%| 13332/14042 [Elapsed: 3:01:33 < Remaining: 09:07,  1.30it/s]
+2026-03-15 18:11:51 - evalscope - INFO: Evaluating[mmlu]  96%| 13442/14042 [Elapsed: 3:02:34 < Remaining: 05:37,  1.78it/s]
+2026-03-15 18:12:52 - evalscope - INFO: Evaluating[mmlu]  97%| 13579/14042 [Elapsed: 3:03:35 < Remaining: 02:47,  2.76it/s]
+2026-03-15 18:13:53 - evalscope - INFO: Evaluating[mmlu]  98%| 13699/14042 [Elapsed: 3:04:36 < Remaining: 03:42,  1.54it/s]
+2026-03-15 18:14:53 - evalscope - INFO: Evaluating[mmlu]  98%| 13817/14042 [Elapsed: 3:05:36 < Remaining: 01:56,  1.93it/s]
+2026-03-15 18:15:54 - evalscope - INFO: Evaluating[mmlu]  99%| 13968/14042 [Elapsed: 3:06:37 < Remaining: 00:36,  2.01it/s]
+2026-03-15 18:16:54 - evalscope - INFO: Evaluating[mmlu] 100%| 14040/14042 [Elapsed: 3:07:37 < Remaining: 00:02,  1.47s/it]
+2026-03-15 18:17:54 - evalscope - INFO: Evaluating[mmlu] 100%| 14041/14042 [Elapsed: 3:08:37 < Remaining: 00:10, 10.90s/it]
+2026-03-15 18:18:00 - evalscope - INFO: Evaluating[mmlu] 100%| 14042/14042 [Elapsed: 3:08:43 < Remaining: 00:00, 12.20s/it]
+2026-03-15 18:18:00 - evalscope - INFO: Unified pool finished for mmlu.
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: abstract_algebra
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: anatomy
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: astronomy
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: business_ethics
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: clinical_knowledge
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: college_biology
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: college_chemistry
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: college_computer_science
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: college_mathematics
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: college_medicine
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: college_physics
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: computer_security
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: conceptual_physics
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: econometrics
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: electrical_engineering
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: elementary_mathematics
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: formal_logic
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: global_facts
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: high_school_biology
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: high_school_chemistry
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: high_school_computer_science
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: high_school_european_history
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: high_school_geography
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: high_school_government_and_politics
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: high_school_macroeconomics
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: high_school_mathematics
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: high_school_microeconomics
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: high_school_physics
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: high_school_psychology
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: high_school_statistics
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: high_school_us_history
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: high_school_world_history
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: human_aging
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: human_sexuality
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: international_law
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: jurisprudence
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: logical_fallacies
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: machine_learning
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: management
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: marketing
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: medical_genetics
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: miscellaneous
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: moral_disputes
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: moral_scenarios
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: nutrition
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: philosophy
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: prehistory
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: professional_accounting
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: professional_law
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: professional_medicine
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: professional_psychology
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: public_relations
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: security_studies
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: sociology
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: us_foreign_policy
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: virology
+2026-03-15 18:18:00 - evalscope - INFO: Aggregating scores for subset: world_religions
+2026-03-15 18:18:00 - evalscope - INFO: Generating report...
+2026-03-15 18:18:00 - evalscope - INFO: 
+mmlu report table:
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| Model    | Dataset   | Metric   | Subset                              |   Num |   Score | Cat.0          |
++==========+===========+==========+=====================================+=======+=========+================+
+| untitled | mmlu      | mean_acc | formal_logic                        |   126 |  0.9365 | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_european_history        |   165 |  0.8606 | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_us_history              |   204 |  0.8775 | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_world_history           |   237 |  0.903  | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | international_law                   |   121 |  0.8017 | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | jurisprudence                       |   108 |  0.8056 | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | logical_fallacies                   |   163 |  0.8528 | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | moral_disputes                      |   346 |  0.7486 | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | moral_scenarios                     |   895 |  0.638  | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | philosophy                          |   311 |  0.7621 | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | prehistory                          |   324 |  0.8765 | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | professional_law                    |  1534 |  0.5522 | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | world_religions                     |   171 |  0.848  | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | anatomy                             |   135 |  0.7852 | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | business_ethics                     |   100 |  0.84   | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | clinical_knowledge                  |   265 |  0.8453 | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | college_medicine                    |   173 |  0.8266 | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | global_facts                        |   100 |  0.55   | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | human_aging                         |   223 |  0.7534 | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | management                          |   103 |  0.9126 | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | marketing                           |   234 |  0.9145 | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | medical_genetics                    |   100 |  0.92   | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | miscellaneous                       |   783 |  0.917  | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | nutrition                           |   306 |  0.8399 | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | professional_accounting             |   282 |  0.8262 | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | professional_medicine               |   272 |  0.8713 | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | virology                            |   166 |  0.5904 | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | abstract_algebra                    |   100 |  0.91   | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | astronomy                           |   152 |  0.9211 | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | college_biology                     |   144 |  0.9306 | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | college_chemistry                   |   100 |  0.73   | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | college_computer_science            |   100 |  0.86   | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | college_mathematics                 |   100 |  0.9    | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | college_physics                     |   102 |  0.9804 | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | computer_security                   |   100 |  0.83   | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | conceptual_physics                  |   235 |  0.9404 | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | electrical_engineering              |   145 |  0.8345 | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | elementary_mathematics              |   378 |  0.9788 | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_biology                 |   310 |  0.929  | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_chemistry               |   203 |  0.9212 | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_computer_science        |   100 |  0.95   | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_mathematics             |   270 |  0.9519 | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_physics                 |   151 |  0.8808 | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_statistics              |   216 |  0.9074 | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | machine_learning                    |   112 |  0.7946 | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | econometrics                        |   114 |  0.7807 | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_geography               |   198 |  0.9091 | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_government_and_politics |   193 |  0.9534 | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_macroeconomics          |   390 |  0.9385 | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_microeconomics          |   238 |  0.9538 | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_psychology              |   545 |  0.9486 | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | human_sexuality                     |   131 |  0.9008 | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | professional_psychology             |   612 |  0.7876 | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | public_relations                    |   110 |  0.7273 | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | security_studies                    |   245 |  0.7918 | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | sociology                           |   201 |  0.8458 | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | us_foreign_policy                   |   100 |  0.88   | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | OVERALL                             | 14042 |  0.8184 | -              |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+ 
+
+2026-03-15 18:18:00 - evalscope - INFO: Skipping report analysis (`analysis_report=False`).
+2026-03-15 18:18:00 - evalscope - INFO: Dump report to: outputs/evalscope/mmlu/20260315_150915/reports/untitled/mmlu.json 
+
+2026-03-15 18:18:00 - evalscope - INFO: Benchmark mmlu evaluation finished.
+2026-03-15 18:18:00 - evalscope - INFO: Running[eval] 100%| 1/1 [Elapsed: 3:08:45 < Remaining: 00:00, 11325.21s/benchmark]
+2026-03-15 18:18:00 - evalscope - INFO: Overall report table: 
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| Model    | Dataset   | Metric   | Subset                              |   Num |   Score | Cat.0          |
++==========+===========+==========+=====================================+=======+=========+================+
+| untitled | mmlu      | mean_acc | formal_logic                        |   126 |  0.9365 | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_european_history        |   165 |  0.8606 | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_us_history              |   204 |  0.8775 | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_world_history           |   237 |  0.903  | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | international_law                   |   121 |  0.8017 | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | jurisprudence                       |   108 |  0.8056 | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | logical_fallacies                   |   163 |  0.8528 | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | moral_disputes                      |   346 |  0.7486 | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | moral_scenarios                     |   895 |  0.638  | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | philosophy                          |   311 |  0.7621 | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | prehistory                          |   324 |  0.8765 | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | professional_law                    |  1534 |  0.5522 | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | world_religions                     |   171 |  0.848  | Humanities     |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | anatomy                             |   135 |  0.7852 | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | business_ethics                     |   100 |  0.84   | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | clinical_knowledge                  |   265 |  0.8453 | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | college_medicine                    |   173 |  0.8266 | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | global_facts                        |   100 |  0.55   | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | human_aging                         |   223 |  0.7534 | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | management                          |   103 |  0.9126 | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | marketing                           |   234 |  0.9145 | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | medical_genetics                    |   100 |  0.92   | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | miscellaneous                       |   783 |  0.917  | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | nutrition                           |   306 |  0.8399 | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | professional_accounting             |   282 |  0.8262 | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | professional_medicine               |   272 |  0.8713 | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | virology                            |   166 |  0.5904 | Other          |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | abstract_algebra                    |   100 |  0.91   | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | astronomy                           |   152 |  0.9211 | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | college_biology                     |   144 |  0.9306 | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | college_chemistry                   |   100 |  0.73   | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | college_computer_science            |   100 |  0.86   | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | college_mathematics                 |   100 |  0.9    | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | college_physics                     |   102 |  0.9804 | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | computer_security                   |   100 |  0.83   | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | conceptual_physics                  |   235 |  0.9404 | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | electrical_engineering              |   145 |  0.8345 | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | elementary_mathematics              |   378 |  0.9788 | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_biology                 |   310 |  0.929  | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_chemistry               |   203 |  0.9212 | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_computer_science        |   100 |  0.95   | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_mathematics             |   270 |  0.9519 | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_physics                 |   151 |  0.8808 | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_statistics              |   216 |  0.9074 | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | machine_learning                    |   112 |  0.7946 | STEM           |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | econometrics                        |   114 |  0.7807 | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_geography               |   198 |  0.9091 | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_government_and_politics |   193 |  0.9534 | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_macroeconomics          |   390 |  0.9385 | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_microeconomics          |   238 |  0.9538 | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | high_school_psychology              |   545 |  0.9486 | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | human_sexuality                     |   131 |  0.9008 | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | professional_psychology             |   612 |  0.7876 | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | public_relations                    |   110 |  0.7273 | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | security_studies                    |   245 |  0.7918 | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | sociology                           |   201 |  0.8458 | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | us_foreign_policy                   |   100 |  0.88   | Social Science |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+
+| untitled | mmlu      | mean_acc | OVERALL                             | 14042 |  0.8184 | -              |
++----------+-----------+----------+-------------------------------------+-------+---------+----------------+ 
+
+2026-03-15 18:18:01 - evalscope - INFO: HTML report generated: /workspace/God-of-Automation/skills/flagos-eval-comprehensive/tools/outputs/evalscope/mmlu/20260315_150915/reports/report.html
+2026-03-15 18:18:01 - evalscope - INFO: HTML report generated: /workspace/God-of-Automation/skills/flagos-eval-comprehensive/tools/outputs/evalscope/mmlu/20260315_150915/reports/report.html
+2026-03-15 18:18:01 - evalscope - INFO: Finished evaluation for untitled on ['mmlu']
+2026-03-15 18:18:01 - evalscope - INFO: Output directory: outputs/evalscope/mmlu/20260315_150915
+2026-03-15 18:18:01 - evalscope - WARNING: Deprecated: The `timeout` parameter is deprecated and will be removed in v2.0.0. Use `generation_config.timeout` instead.
+2026-03-15 18:18:01 - evalscope - WARNING: Deprecated: The `stream` parameter is deprecated and will be removed in v2.0.0. Use `generation_config.stream` instead.
+2026-03-15 18:18:01 - evalscope - INFO: Args: Task config is provided with TaskConfig type.

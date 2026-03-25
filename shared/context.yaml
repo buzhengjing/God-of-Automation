@@ -2,47 +2,64 @@
 # 由上游 skill 写入，下游 skill 读取
 #
 # 使用说明:
-#   - flagos-model-introspection 写入模型和部署信息
-#   - flagos-environment-preparation 写入容器和 GPU 信息
+#   - flagos-container-preparation 写入模型、容器和 GPU 信息
+#   - flagos-pre-service-inspection 写入环境检查信息
 #   - flagos-service-startup 写入服务信息
+#   - flagos-operator-replacement 写入算子替换信息
 #   - flagos-performance-testing 读取服务连接信息
 
 # ============================================================================
-# 模型信息 (由 model-introspection 写入)
+# 执行模式 (由 pre-service-inspection 写入)
+# ============================================================================
+execution:
+  mode: ""                    # host | container (Claude Code 运行位置)
+  cmd_prefix: ""              # "" (容器内) 或 "docker exec <container>" (宿主机)
+
+# ============================================================================
+# 场景 (由 start_deployment.sh 入口确定)
+# ============================================================================
+scenario: ""                  # 新模型迁移发布
+
+# ============================================================================
+# 环境入口 (由 container-preparation 写入)
+# ============================================================================
+entry:
+  type: ""                    # existing_container | new_container | readme_parse
+  source: ""                  # 用户原始输入
+
+# ============================================================================
+# 模型信息 (由 container-preparation 写入)
 # ============================================================================
 model:
-  name: ""                # 模型标识名
-  source: ""              # 来源: modelscope|huggingface|git|local
-  readme_found: false     # 是否找到 README
+  name: ""                # 模型标识名（用户直接提供）
+  url: ""                 # 模型 URL（用户直接提供）
   local_path: ""          # 模型在主机上的路径
   container_path: ""      # 模型在容器内的路径
   tokenizer_path: ""      # tokenizer 路径 (通常与 model 路径相同)
 
 # ============================================================================
-# 部署信息 (由 model-introspection 写入)
-# ============================================================================
-deployment:
-  image: ""               # Docker 镜像地址
-  docker_run: ""          # docker run 命令
-  startup_command: ""     # 服务启动命令
-  model_download: ""      # 模型下载命令
-
-# ============================================================================
-# 容器信息 (由 environment-preparation 写入)
+# 容器信息 (由 container-preparation 写入)
 # ============================================================================
 container:
   name: ""                # 容器名称
   status: ""              # 状态: running|stopped
 
 # ============================================================================
-# 镜像信息 (由 environment-preparation 写入)
+# 镜像信息 (由 container-preparation 写入)
 # ============================================================================
 image:
-  name: ""                # 镜像名称
+  name: ""                # 镜像名称（用户直接提供）
   tag: ""                 # 镜像标签
 
 # ============================================================================
-# GPU 信息 (由 environment-preparation 写入)
+# 工作目录 (由 container-preparation 写入)
+# ============================================================================
+workspace:
+  host_path: ""           # 宿主机路径: /data/flagos-workspace/<model_name>
+  container_path: "/flagos-workspace"
+
+# ============================================================================
+# GPU 信息 (由 container-preparation 写入)
 # ============================================================================
 gpu:
   vendor: ""              # 厂商: nvidia|huawei|hygon|mthreads|kunlunxin|tianshu|metax|tsingmicro|cambricon|alibaba
@@ -74,22 +91,157 @@ gpu:
 #   cambricon   -> cnmon
 
 # ============================================================================
+# 环境检查信息 (由 pre-service-inspection 写入)
+# ============================================================================
+inspection:
+  core_packages:            # 核心组件版本
+    torch: ""
+    vllm: ""
+    sglang: ""
+  flag_packages:            # flag 生态组件版本
+    flaggems: ""
+    flagscale: ""
+    flagcx: ""
+    vllm_plugin: ""
+  flaggems_control: ""      # env_var | code_comment
+  flaggems_logic: ""        # unused | only_enable
+  flaggems_code_path: ""    # flaggems 代码所在文件路径
+  flaggems_code_lines: ""   # 相关代码行号范围
+  flaggems_capabilities: [] # 运行时探测到的能力列表 (enable_unused, only_enable, yaml_config, vendor_default, query_ops, query_ops_legacy, use_gems_filter)
+  vendor_config_path: ""    # 厂商默认配置文件路径（如存在）
+  vllm_plugin_installed: false  # 是否安装了 vllm-plugin-FL
+  plugin_has_dispatch: false    # vllm-plugin-FL 是否有 OpManager 调度
+  oot_ops: []                   # OOT 算子列表 (来自 plugin 探测)
+  env_vars: {}              # flag 相关环境变量 (USE_FLAGGEMS, USE_FLAGOS 等)
+
+# ============================================================================
+# Plugin 控制信息 (由 pre-service-inspection 写入)
+# ============================================================================
+plugin_control:
+  prefer_enabled: ""            # VLLM_FL_PREFER_ENABLED 当前值
+  oot_enabled: ""               # VLLM_FL_OOT_ENABLED 当前值
+  oot_ops: []                   # 已注册的 OOT 算子列表
+  flagos_whitelist: ""          # 当前 VLLM_FL_FLAGOS_WHITELIST
+  flagos_blacklist: ""          # 当前 VLLM_FL_FLAGOS_BLACKLIST
+  oot_blacklist: ""             # 当前 VLLM_FL_OOT_BLACKLIST
+  dispatch_mode: ""             # flagos | vendor | reference
+
+# ============================================================================
+# FlagTree 信息 (由 pre-service-inspection 写入)
+# ============================================================================
+flagtree:
+  installed: false          # 是否已安装
+  version: ""               # FlagTree 版本
+  triton_version: ""        # 对应 Triton 版本
+  install_method: ""        # pip | source | pre_installed
+  backend: ""               # nvidia | ascend | ...
+
+# ============================================================================
+# 环境状态 (由 service-startup 写入)
+# ============================================================================
+environment:
+  has_plugin: false          # 是否有 vllm-plugin-FL
+  has_flagtree: false        # 是否有 FlagTree
+  flagtree_installed_by_us: false  # 是否由本流程安装的 FlagTree
+  initial_env_verified: false      # 初始环境是否验证通过
+  flagtree_env_verified: false     # FlagTree 环境是否验证通过
+
+# ============================================================================
+# FlagGems 启停方法 (由 pre-service-inspection 探测写入)
+# ============================================================================
+flaggems_control:
+  enable_method: ""           # 如何启用 FlagGems (env:USE_FLAGGEMS=1 / auto / script:xxx)
+  disable_method: ""          # 如何关闭 FlagGems (env:USE_FLAGGEMS=0 / uninstall / script:xxx)
+  integration_type: ""        # env_var | plugin | code_import | script | config_file
+
+# ============================================================================
 # 运行时信息 (由 service-startup 写入)
 # ============================================================================
 runtime:
   framework: ""           # 框架: vllm|sglang
   flaggems_enabled: false # 是否启用 FlagGems
+  tp_size: 0              # tensor-parallel-size（由 calc_tp_size.py 推算）
+  tp_reason: ""           # TP 推算原因
 
 # ============================================================================
 # 服务信息 (由 service-startup 写入)
 # ============================================================================
 service:
-  host: ""                # 服务地址
+  cluster: ""             # 集群/机房标识 (如 "腾讯云北京", "阿里云上海" 等)
+  external_ip: ""         # 宿主机外部 IP (供远端评测平台访问)
+  host: ""                # 服务地址 (容器内通常为 localhost)
   port: 8000              # 服务端口
   endpoint: "/v1/completions"
   process_id: ""          # 服务进程 PID
   healthy: false          # 服务是否健康
   model_id: ""            # API 返回的模型 ID
+  log_path: ""            # 服务日志路径
+  gems_txt_path: ""       # gems.txt 文件路径
+  enable_oplist_path: ""  # flaggems_enable_oplist.txt 路径（运行时权威算子列表）
+  enable_oplist_count: 0  # oplist 中的算子数量
+  initial_operator_list: [] # 初始算子列表
+
+# ============================================================================
+# 评测信息 (由 eval-correctness 写入)
+# ============================================================================
+eval:
+  request_id: ""            # 远端评测任务 ID
+  domain: ""                # 评测领域: NLP|MM
+  mode: ""                  # 评测模式: FlagRelease|XLC_train|XLC_infer 等
+  eval_method: ""           # 评测方式: remote|local
+  status: ""                # 评测状态: S|F|C|OOR|running|local
+  results: {}               # 最终评测结果
+
+# ============================================================================
+# 算子替换信息 (由 operator-replacement 写入)
+# ============================================================================
+operator_replacement:
+  replaced_operators: []    # 已替换/排除的算子列表
+  replacement_mode: ""      # yaml_config | only_enable | enable_unused | source_edit | plugin_env
+  final_gems_txt: ""        # 最终 gems.txt 内容/路径
+  config_file_path: ""      # YAML 配置模式下的文件路径
+  env_vars: {}              # Plugin 模式下的当前环境变量快照
+  available_ops: []         # 查询到的完整可用算子列表
+  rollback_info: ""         # 如何还原此次替换操作
+
+# ============================================================================
+# 原生性能基线 (由 performance-testing 写入)
+# ============================================================================
+native_perf:
+  result_path: ""             # native_performance.json 路径
+  output_throughput: 0        # Output token throughput (tok/s)
+  total_throughput: 0         # Total token throughput (tok/s)
+
+# ============================================================================
+# FlagOS Full 性能 (由 performance-testing 写入)
+# ============================================================================
+flagos_full_perf:
+  result_path: ""             # flagos_full.json 路径
+  output_throughput: 0
+  total_throughput: 0
+
+# ============================================================================
+# FlagOS Optimized 性能 (由 performance-testing 写入)
+# ============================================================================
+flagos_optimized_perf:
+  result_path: ""             # flagos_optimized.json 路径
+  output_throughput: 0
+  total_throughput: 0
+
+# ============================================================================
+# 算子优化 (由 operator-replacement 写入)
+# ============================================================================
+optimization:
+  target_ratio: 0.8           # 性能目标: FlagOS / Native >= 80%
+  current_ratio: 0            # 当前性能比
+  search_phase: ""            # oot | group | done
+  plugin_mode: false          # 是否使用 plugin 环境变量控制
+  enabled_ops: []             # 当前启用的算子列表
+  disabled_ops: []            # 当前禁用的算子列表
+  oot_blacklist: []           # OOT 层需禁用的算子
+  flagos_blacklist: []        # torch 底层需禁用的算子
+  operator_config_path: ""    # operator_config.json 路径
+  search_log: []              # 搜索历史记录
 
 # ============================================================================
 # 元数据

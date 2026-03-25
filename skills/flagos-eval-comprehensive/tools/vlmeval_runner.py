@@ -121,8 +121,36 @@ def run_vlmeval_via_api(
     return run_batch_evalscope(benchmarks, config, work_dir, limit, logger)
 
 
-def parse_vlmeval_result(result: Dict, display_name: str) -> Optional[Dict]:
-    """解析 VLMEvalKit 返回的结果。"""
+def parse_vlmeval_result(result, display_name: str) -> Optional[Dict]:
+    """
+    解析 VLMEvalKit 返回的结果。
+
+    run_task 可能返回 {benchmark_name: Report} (native backend)
+    或空 dict (VLMEvalKit backend)。run_vlmeval_via_api 回退到
+    run_batch_evalscope 时返回 List[Dict]。
+
+    Args:
+        result: run_vlmeval_benchmark / run_vlmeval_via_api 返回的结果
+        display_name: 显示名称
+    """
+    # run_vlmeval_via_api fallback returns a list from run_batch_evalscope
+    if isinstance(result, list):
+        # 批量结果：提取第一个有效 benchmark 结果
+        from evalscope_runner import parse_evalscope_result
+        for item in result:
+            raw = item.get('result', {})
+            parsed = parse_evalscope_result(raw, item.get('display_name', display_name))
+            if parsed and parsed.get('accuracy', 0) > 0:
+                return parsed
+        # 全部为 0 或空，返回第一个
+        if result:
+            raw = result[0].get('result', {})
+            return parse_evalscope_result(raw, display_name)
+        return build_detail(display_name, 0.0, {"error": "Empty result list"}, "F")
+
+    if not isinstance(result, dict):
+        return build_detail(display_name, 0.0, {"parse_error": str(result)}, "F")
+
     if "error" in result:
         return build_detail(
             dataset=display_name,
@@ -132,17 +160,32 @@ def parse_vlmeval_result(result: Dict, display_name: str) -> Optional[Dict]:
         )
 
     try:
-        score = _extract_vlm_score(result)
+        # Handle Report objects (same as evalscope_runner)
+        serializable_result = {}
+        score = None
+        for key, val in result.items():
+            if hasattr(val, 'to_dict'):
+                val_dict = val.to_dict()
+                serializable_result[key] = val_dict
+                if score is None and 'score' in val_dict:
+                    score = val_dict['score']
+            elif isinstance(val, dict):
+                serializable_result[key] = val
+                if score is None:
+                    score = _extract_vlm_score(val)
+            else:
+                serializable_result[key] = val
+
         if score is not None:
             return build_detail(
                 dataset=display_name,
                 accuracy=score * 100 if score <= 1.0 else score,
-                raw_details=result,
+                raw_details=serializable_result,
             )
         return build_detail(
             dataset=display_name,
             accuracy=0.0,
-            raw_details=result,
+            raw_details=serializable_result,
             status="S",
         )
     except Exception:

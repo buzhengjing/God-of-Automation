@@ -9,8 +9,64 @@ import sys
 import json
 import traceback
 from typing import Dict, List, Optional, Any
+from urllib.parse import urlparse
+
+import requests
 
 from utils import ProgressLogger, load_config, build_detail
+
+
+def _get_model_max_len(
+    api_url: str,
+    api_key: str,
+    model_name: str,
+    logger: Optional[ProgressLogger] = None,
+) -> Optional[int]:
+    """
+    查询 /v1/models 接口获取模型的 max_model_len。
+
+    Args:
+        api_url: OpenAI 兼容 API 地址（可能带 /v1 后缀）
+        api_key: API 密钥
+        model_name: 模型名称
+
+    Returns:
+        max_model_len 整数值，失败时返回 None
+    """
+    try:
+        # 规范化 base URL：去掉末尾 /v1 或 /v1/，再拼接 /v1/models
+        base = api_url.rstrip('/')
+        if base.endswith('/v1'):
+            base = base[:-3]
+        models_url = f"{base}/v1/models"
+
+        headers = {}
+        if api_key and api_key != 'EMPTY':
+            headers['Authorization'] = f'Bearer {api_key}'
+
+        resp = requests.get(models_url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+
+        # /v1/models 返回 {"data": [{"id": "model_name", ...}, ...]}
+        for model_info in data.get('data', []):
+            if model_info.get('id') == model_name:
+                max_len = model_info.get('max_model_len')
+                if max_len is not None:
+                    return int(max_len)
+
+        # 如果只有一个模型，直接用它
+        models = data.get('data', [])
+        if len(models) == 1:
+            max_len = models[0].get('max_model_len')
+            if max_len is not None:
+                return int(max_len)
+
+    except Exception as e:
+        if logger:
+            logger.log(f"[WARN] Failed to query model max_len: {e}")
+
+    return None
 
 
 def run_evalscope_benchmark(
@@ -62,8 +118,29 @@ def run_evalscope_benchmark(
     if dataset_filters:
         dataset_args[benchmark_name]['filters'] = dataset_filters
 
+    # 动态调整 max_tokens，防止超出模型上下文长度
+    max_model_len = _get_model_max_len(api_url, api_key, model_name, logger)
+    if max_model_len and generation_config.get('max_tokens', 0) > 0:
+        safe_max = max_model_len - 8192  # 预留 8K 给 prompt
+        if generation_config['max_tokens'] > safe_max:
+            adjusted = max(safe_max, 1024)  # 至少保留 1024
+            if logger:
+                logger.log(
+                    f"[WARN] max_tokens {generation_config['max_tokens']} "
+                    f"exceeds model context {max_model_len}, "
+                    f"adjusting to {adjusted}"
+                )
+            generation_config = {**generation_config, 'max_tokens': adjusted}
+
     # 构建 TaskConfig
     try:
+        # 将 timeout/stream 迁移到 generation_config 内（避免 EvalScope v2.0 废弃警告）
+        gen_config = dict(generation_config)
+        if 'timeout' not in gen_config:
+            gen_config['timeout'] = evalscope_config.get('timeout', 60000)
+        if 'stream' not in gen_config:
+            gen_config['stream'] = evalscope_config.get('stream', True)
+
         # Build TaskConfig kwargs
         task_kwargs = dict(
             model=model_name,
@@ -73,9 +150,7 @@ def run_evalscope_benchmark(
             datasets=[benchmark_name],
             dataset_args=dataset_args,
             eval_batch_size=evalscope_config.get('eval_batch_size', 64),
-            generation_config=generation_config,
-            timeout=evalscope_config.get('timeout', 60000),
-            stream=evalscope_config.get('stream', True),
+            generation_config=gen_config,
             dataset_hub=evalscope_config.get('dataset_hub', 'modelscope'),
             work_dir=work_dir,
         )
@@ -171,6 +246,9 @@ def parse_evalscope_result(result: Dict, display_name: str) -> Optional[Dict]:
     """
     解析 EvalScope 返回的结果，转换为标准 detail 格式。
 
+    run_task() 返回 {benchmark_name: Report_object}，其中 Report 是 evalscope
+    的 dataclass，需要调用 .to_dict() 转为 dict 后才能 JSON 序列化和提取分数。
+
     Args:
         result: run_evalscope_benchmark 返回的原始结果
         display_name: 显示名称
@@ -186,25 +264,36 @@ def parse_evalscope_result(result: Dict, display_name: str) -> Optional[Dict]:
             status="F",
         )
 
-    # EvalScope 结果格式可能因 benchmark 不同而异
-    # 通常在 result 的某个 key 下包含 score/accuracy
     try:
-        # 尝试从常见位置提取分数
-        if isinstance(result, dict):
-            # 检查是否有 score 字段
-            score = _extract_score(result)
-            if score is not None:
-                return build_detail(
-                    dataset=display_name,
-                    accuracy=score * 100 if score <= 1.0 else score,
-                    raw_details=result,
-                )
+        # run_task returns {benchmark_name: Report_object}
+        # Convert Report objects to dicts and extract score
+        serializable_result = {}
+        score = None
+        for key, val in result.items():
+            if hasattr(val, 'to_dict'):
+                # Report object — convert to dict for serialization
+                val_dict = val.to_dict()
+                serializable_result[key] = val_dict
+                if score is None and 'score' in val_dict:
+                    score = val_dict['score']
+            elif isinstance(val, dict):
+                serializable_result[key] = val
+                if score is None:
+                    score = _extract_score(val)
+            else:
+                serializable_result[key] = val
 
-        # 如果无法解析，返回原始结果
+        if score is not None:
+            return build_detail(
+                dataset=display_name,
+                accuracy=score * 100 if score <= 1.0 else score,
+                raw_details=serializable_result,
+            )
+
         return build_detail(
             dataset=display_name,
             accuracy=0.0,
-            raw_details=result if isinstance(result, dict) else {"raw": str(result)},
+            raw_details=serializable_result,
             status="S",
         )
     except Exception:
@@ -214,6 +303,168 @@ def parse_evalscope_result(result: Dict, display_name: str) -> Optional[Dict]:
             raw_details={"parse_error": str(result)},
             status="F",
         )
+
+
+def validate_predictions(
+    work_dir: str,
+    benchmark_name: str,
+    model_is_thinking: bool = False,
+    logger: Optional[ProgressLogger] = None,
+) -> Dict:
+    """
+    扫描 EvalScope 输出的 prediction jsonl 文件，校验每条结果。
+
+    校验项：
+    1. 空返回：model_output 为空或无 choices
+    2. Thinking 缺失：thinking 模型的输出缺少 reasoning 块
+    3. 上下文溢出：输出含 context length / token limit 错误信息
+
+    Args:
+        work_dir: EvalScope 输出目录（含 predictions/ 子目录）
+        benchmark_name: benchmark 名称
+        model_is_thinking: 模型是否为 thinking model
+        logger: 日志器
+
+    Returns:
+        校验结果 dict：total, valid, issues, pass
+    """
+    import glob as glob_mod
+
+    issues = {
+        "empty_responses": [],
+        "missing_thinking": [],
+        "context_overflow": [],
+        "short_responses": [],
+    }
+    total = 0
+    valid = 0
+
+    # 查找 predictions 目录下的所有 jsonl 文件
+    pred_pattern = os.path.join(work_dir, "**", "predictions", "**", "*.jsonl")
+    pred_files = glob_mod.glob(pred_pattern, recursive=True)
+
+    if not pred_files:
+        if logger:
+            logger.log(f"[VALIDATE] No prediction files found in {work_dir}")
+        return {"total": 0, "valid": 0, "issues": issues, "pass": True}
+
+    CONTEXT_OVERFLOW_PATTERNS = [
+        "context length", "maximum.*token", "exceed.*length",
+        "token limit", "too long", "max_model_len",
+    ]
+
+    for pred_file in pred_files:
+        try:
+            with open(pred_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    total += 1
+                    idx = record.get('index', total)
+                    model_output = record.get('model_output', {})
+
+                    # 检查 error 字段
+                    if isinstance(model_output, dict) and model_output.get('error'):
+                        error_msg = str(model_output['error']).lower()
+                        # 检查是否为上下文溢出
+                        if any(p in error_msg for p in CONTEXT_OVERFLOW_PATTERNS):
+                            issues["context_overflow"].append({"index": idx, "error": model_output['error']})
+                        else:
+                            issues["empty_responses"].append({"index": idx, "error": model_output['error']})
+                        continue
+
+                    # 提取 choices
+                    choices = []
+                    if isinstance(model_output, dict):
+                        choices = model_output.get('choices', [])
+
+                    if not choices:
+                        issues["empty_responses"].append({"index": idx, "reason": "no choices in model_output"})
+                        continue
+
+                    # 提取 message content
+                    message = choices[0].get('message', {}) if isinstance(choices[0], dict) else {}
+                    content = message.get('content', '')
+
+                    # content 可能是字符串或列表（thinking 模型）
+                    has_text = False
+                    has_reasoning = False
+                    text_content = ""
+
+                    if isinstance(content, str):
+                        text_content = content
+                        has_text = bool(content.strip())
+                        # 字符串形式的 thinking 输出可能包含 <think> 标签
+                        has_reasoning = '<think>' in content
+                    elif isinstance(content, list):
+                        for part in content:
+                            if isinstance(part, dict):
+                                if part.get('type') == 'text':
+                                    text_val = part.get('text', '')
+                                    if text_val and text_val.strip():
+                                        has_text = True
+                                        text_content += text_val
+                                elif part.get('type') == 'reasoning':
+                                    reasoning_val = part.get('reasoning', '')
+                                    if reasoning_val and reasoning_val.strip():
+                                        has_reasoning = True
+                                        text_content += reasoning_val
+
+                    # 校验 1：空返回
+                    if not has_text and not has_reasoning:
+                        issues["empty_responses"].append({"index": idx, "reason": "empty content"})
+                        continue
+
+                    # 校验 2：过短返回（仅警告）
+                    if len(text_content) < 10:
+                        issues["short_responses"].append({"index": idx, "length": len(text_content)})
+
+                    # 校验 3：Thinking 模式缺失
+                    if model_is_thinking and not has_reasoning:
+                        issues["missing_thinking"].append({"index": idx, "reason": "no reasoning block"})
+
+                    # 校验 4：上下文溢出（检查 stop_reason）
+                    stop_reason = choices[0].get('stop_reason', '') or choices[0].get('finish_reason', '') or ''
+                    if stop_reason == 'length':
+                        # 输出被截断，可能因为 max_tokens 不够
+                        issues["context_overflow"].append({"index": idx, "reason": f"stop_reason=length"})
+
+                    valid += 1
+
+        except Exception as e:
+            if logger:
+                logger.log(f"[VALIDATE] Error reading {pred_file}: {e}")
+
+    # 判定是否通过
+    passed = (
+        len(issues["empty_responses"]) == 0
+        and len(issues["context_overflow"]) == 0
+    )
+
+    # 日志输出
+    if logger:
+        logger.log(f"[VALIDATE] {benchmark_name}: total={total}, valid={valid}, pass={'YES' if passed else 'NO'}")
+        if issues["empty_responses"]:
+            logger.log(f"  [FAIL] {len(issues['empty_responses'])} empty responses: {[i['index'] for i in issues['empty_responses']]}")
+        if issues["missing_thinking"]:
+            logger.log(f"  [FAIL] {len(issues['missing_thinking'])} missing thinking: {[i['index'] for i in issues['missing_thinking']]}")
+        if issues["context_overflow"]:
+            logger.log(f"  [FAIL] {len(issues['context_overflow'])} context overflow: {[i['index'] for i in issues['context_overflow']]}")
+        if issues["short_responses"]:
+            logger.log(f"  [WARN] {len(issues['short_responses'])} short responses (<10 chars)")
+
+    return {
+        "total": total,
+        "valid": valid,
+        "issues": issues,
+        "pass": passed,
+    }
 
 
 def _extract_score(result: dict, depth: int = 0) -> Optional[float]:
@@ -263,4 +514,5 @@ if __name__ == '__main__':
         limit=args.limit,
         logger=logger,
     )
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    parsed = parse_evalscope_result(result, args.benchmark)
+    print(json.dumps(parsed, indent=2, ensure_ascii=False))

@@ -2,6 +2,15 @@
 
 本文档整理了 FlagOS GPU 性能测试自动化框架中所有 Skill 的功能说明和执行顺序。
 
+**支持双执行模式**：
+- **Host 模式**：Claude Code 在宿主机，通过 `docker exec` 操作容器
+- **Container 模式**：Claude Code 在容器内，直接执行命令
+
+**支持多入口**：
+- 已有容器 → 直接接入
+- 已有镜像 → 创建容器
+- README 链接 → 解析后创建容器
+
 ---
 
 ## 统一工作目录
@@ -12,260 +21,184 @@
 宿主机: /data/flagos-workspace/<model_name>/
                       ↓ 挂载
 容器内: /flagos-workspace/
-             │
-             ├── output/          # 服务启动后自动生成的日志
-             │   └── <服务名>/
-             │       └── serve/
-             │           └── *.log
-             │
-             ├── eval/            # 评测结果和日志
-             │   ├── aime_result.json
-             │   ├── erqa_result.json
-             │   └── eval_*.log
-             │
-             ├── perf/            # 性能测试结果
-             │   └── benchmark_*.json
-             │
-             └── shared/
-                 └── context.yaml # 共享上下文
+    ├── scripts/              # 自动化脚本
+    │   ├── benchmark_runner.py
+    │   ├── performance_compare.py
+    │   ├── operator_optimizer.py
+    │   ├── operator_search.py
+    │   ├── eval_monitor.py
+    │   └── ...
+    ├── logs/                 # 操作日志
+    ├── results/              # 性能数据
+    │   ├── native_performance.json
+    │   ├── flagos_full.json
+    │   ├── flagos_optimized.json
+    │   ├── operator_config.json
+    │   └── performance_compare.csv
+    ├── reports/              # 报告
+    │   ├── env_report.md
+    │   ├── flag_gems_detection.md
+    │   └── final_report.md
+    ├── output/               # 服务日志
+    ├── eval/                 # 评测结果
+    ├── perf/                 # 兼容旧性能测试
+    └── shared/
+        └── context.yaml
 ```
 
-**优势**：
-- **实时日志监控**：宿主机直接 `tail -f /data/flagos-workspace/<model>/output/**/*.log`
-- **无需 docker exec**：所有日志、配置、结果在宿主机可直接访问和编辑
-- **结果持久化**：容器删除后数据仍保留在宿主机
+---
+
+## 工作流程图
+
+### 新模型迁移发布
+
+```
+① container-preparation       容器准备（多入口自动识别）
+        ↓
+② pre-service-inspection      环境检测 + FlagGems/FlagTree 探测
+        ↓                     → env_report.md + flag_gems_detection.md
+③ service-startup (default)   以当前环境原样启动，验证初始环境可用
+        ↓
+④ [询问用户] 是否安装 FlagTree?
+   ├── 否 → 在当前环境进行三版测试
+   └── 是 → ④a 安装 FlagTree → ④b 重启验证
+             ├── 成功 → 在 plugin+FlagTree 环境继续
+             └── 失败 → ④c 恢复环境（重新 run 或卸载 FlagTree）
+        ↓
+⑤ eval-correctness (native)     精度评测（询问用户）
+⑥ performance-testing (native)  Native 性能基线
+⑦ service-startup (flagos)      启用全量 FlagGems
+⑧ eval-correctness (full)       精度评测（询问用户）+ 算子报错自动处理
+⑨ performance-testing (full)    Full FlagGems 性能
+⑩ [自动] 性能对比               full_flagos/native ≥ 80%?
+   ├── 是 → Optimized = Full，跳到 ⑬
+   └── 否 → ⑪ operator-replacement（分组二分搜索）
+⑫ performance-testing (optimized) Optimized FlagGems 性能
+⑬ 三版性能对比 + 生成最终报告
+```
+
+**三版结果文件**：
+- `native_performance.json` — Native（无 FlagGems）
+- `flagos_full.json` — Full FlagGems（全量算子）
+- `flagos_optimized.json` — Optimized FlagGems（≥80% 组合）
+
+**自动化**：步骤⑤~⑬大部分无需人工干预。仅在以下情况询问用户：
+- docker run 命令最终确认
+- 是否安装 FlagTree
+- 是否执行精度评测
+- 搜索 3 轮仍未达标时
+- FlagTree 安装失败时是否重新 run 容器
 
 ---
 
 ## Skills 架构图
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           主流程 (顺序执行)                                   │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│   ①                    ②                       ③                           │
-│   model-introspection → environment-preparation → service-startup           │
-│   (模型检查)            (环境准备)               (服务启动)                   │
-│                                                       │                     │
-│                                                       ↓                     │
-│                                                 ④ flagos-eval-correctness   │
-│                                                   (精度测试)                 │
-│                                                       │                     │
-│                                                       ↓                     │
-│                                                 ⑤ flagos-performance-testing│
-│                                                   (性能测试)                 │
-│                                                       │                     │
-│                                                       ↓                     │
-│                                                 ⑥ flagos-release            │
-│                                                   (镜像/模型发布)            │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           独立工具 (按需调用)                                 │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│   ⑦ flagos-log-analyzer (日志分析诊断) — 宿主机直接访问日志，无需 docker exec │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                     主流程 (顺序执行)                                 │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  ① container-preparation    多入口容器准备（已有容器/镜像/README）     │
+│         ↓                                                           │
+│  ② pre-service-inspection   环境检测 + FlagGems 深度探测 + 报告       │
+│         ↓                                                           │
+│  ③ service-startup          启动服务（支持 native/flagos 模式切换）    │
+│         ↓                                                           │
+│  ④ eval-correctness         精度评测（询问用户）                      │
+│         ↓                                                           │
+│  ⑤ performance-testing      性能测试（并发搜索+早停+自动对比）         │
+│                                                                     │
+├─────────────────────────────────────────────────────────────────────┤
+│                     独立工具 (按需调用)                               │
+├─────────────────────────────────────────────────────────────────────┤
+│  ⑥ operator-replacement     算子替换 + 分组二分搜索优化               │
+│  ⑦ log-analyzer             日志分析 + 失败恢复指引                   │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## Skills 详细说明
 
-### ① flagos-model-discovery (模型检查)
+### ① flagos-container-preparation (多入口容器准备)
 
 | 属性 | 说明 |
 |------|------|
-| **功能** | 从模型仓库的 README 提取部署说明 |
+| **功能** | 自动识别入口类型（容器名/镜像/URL），检测 GPU，创建或接入容器 |
 | **依赖** | 无 (流程起点) |
-| **触发词** | `model introspection`, `inspect model`, `模型检查`, `检查部署说明` |
+| **触发词** | `container preparation`, `prepare container`, `容器准备`, `环境准备` |
 
-**主要工作:**
-1. 获取模型来源 (ModelScope/HuggingFace/Git/本地)
-2. 读取 README 内容
-3. 提取 Docker 镜像、docker run 命令、服务启动命令
-4. 确定运行时框架 (FlagScale/vLLM/SGLang)
-5. 写入 `shared/context.yaml`
+**三种入口**：
 
-**服务启动命令识别模式:**
-| 命令模式 | 框架 |
-|----------|------|
-| `flagscale serve ...` | FlagScale |
-| `vllm serve ...` | vLLM |
-| `python -m vllm.entrypoints...` | vLLM |
-| `python -m sglang.launch_server ...` | SGLang |
-
-**注意:** FlagScale 是 FlagOS 推荐的统一推理框架，优先检测。
-
-**输出字段:**
-```yaml
-model.name, model.source, model.readme_found
-deployment.image, deployment.docker_run, deployment.startup_command, deployment.model_download
-runtime.framework  # vllm | sglang | flagscale
-```
+| 入口 | 用户提供什么 | 系统做什么 |
+|------|-------------|-----------|
+| 已有容器 | 容器名/ID | docker inspect → 验证 → 接入 |
+| 已有镜像 | 镜像地址 + 模型信息 | docker run 创建 |
+| README | URL 链接 | WebFetch → 解析 → docker pull + run |
 
 ---
 
-### ② flagos-environment-preparation (环境准备)
+### ② flagos-pre-service-inspection (环境检测 + 深度探测)
 
 | 属性 | 说明 |
 |------|------|
-| **功能** | 准备运行时环境：镜像拉取、容器创建、GPU 检测 |
-| **依赖** | `flagos-model-discovery` |
-| **触发词** | `environment preparation`, `prepare environment`, `环境准备` |
-
-**主要工作:**
-1. 检测 GPU 厂商 (支持 10 种: NVIDIA、华为、海光等)
-2. 验证主机基础环境 (Docker、磁盘、内存)
-3. 检查模型是否已存在 / 执行下载
-4. 拉取 Docker 镜像
-5. 创建并启动容器
-6. 验证容器状态和 GPU 可见性
-
-**输出字段:**
-```yaml
-container.name, container.status
-image.name, image.tag
-model.local_path, model.container_path
-gpu.vendor, gpu.count, gpu.visible_devices_env
-```
+| **功能** | 执行模式检测 + 核心组件检查 + FlagGems 多维度深度探测 + 报告生成 |
+| **依赖** | `flagos-container-preparation` |
+| **触发词** | `pre-service inspection`, `inspect environment`, `服务前检查`, `环境检查` |
 
 ---
 
-### ③ flagos-service-startup (服务启动)
+### ③ flagos-service-startup (服务启动 — 支持模式切换)
 
 | 属性 | 说明 |
 |------|------|
-| **功能** | 在容器内启动推理服务并验证健康状态 |
-| **依赖** | `flagos-environment-preparation` |
-| **触发词** | `service startup`, `start service`, `启动服务`, `health check`, `健康检查` |
+| **功能** | 生成启动命令、支持 native/flagos 模式切换、验证健康状态、失败自动恢复 |
+| **依赖** | `flagos-pre-service-inspection` |
+| **触发词** | `service startup`, `start service`, `启动服务`, `health check` |
 
-**主要工作:**
+**启动模式**：default（原始配置，验证初始环境）/ native（关闭 FlagGems）/ flagos（启用 FlagGems）
 
-**阶段一 - 环境检查:**
-1. 进入容器
-2. 检查 GPU 可见性
-3. 检查运行时环境 (torch, vllm, sglang, flag-gems)
-4. 检测 FlagGems 集成状态
-5. 询问用户是否启用 FlagGems
-
-**阶段二 - 启动服务:**
-6. 生成启动命令 (含 `USE_FLAGGEMS` 环境变量)
-7. 执行启动命令
-
-**阶段三 - 服务验证:**
-8. 检查进程状态
-9. 查询 `/v1/models` API
-10. 运行推理测试
-11. 验证 FlagGems 是否生效
-
-**输出字段:**
-```yaml
-service.host, service.port, service.process_id, service.healthy, service.model_id
-runtime.gpu_count, runtime.flaggems_enabled
-```
+**新增**：FlagTree 安装验证逻辑 — 安装后重启服务验证，失败自动恢复
 
 ---
 
-### ④ flagos-eval-correctness (精度测试)
+### ④ flagos-eval-correctness (精度评测)
 
 | 属性 | 说明 |
 |------|------|
-| **功能** | 自动化大模型正确性评测，支持 AIME（数学竞赛）和 ERQA（具身推理）数据集 |
+| **功能** | 自动化正确性评测，优先远端 FlagEval API，支持本地降级 |
 | **依赖** | `flagos-service-startup` |
-| **触发词** | `精度评测`, `正确性评测`, `accuracy test`, `eval correctness`, `AIME`, `ERQA` |
+| **触发词** | `精度评测`, `正确性评测`, `accuracy test`, `eval correctness` |
 
-**主要工作:**
-1. 准备评测环境（虚拟环境、依赖安装）
-2. 配置模型连接信息
-3. 运行 AIME/ERQA 评测脚本
-4. 监控评测进度
-5. 收集评测结果
-
-**支持的数据集:**
-| 数据集 | 类型 | 说明 |
-|--------|------|------|
-| AIME | 数学竞赛 | JSONL 格式，提取数值答案 |
-| ERQA | 具身推理 | Parquet 格式，多模态选择题 |
-
-**输出字段:**
-```yaml
-eval.aime_accuracy, eval.erqa_accuracy, eval.timestamp
-```
+服务启动后、性能测试前询问用户是否执行。错误处理闭环：算子失败→关闭→重启→重评。
 
 ---
 
-### ⑤ flagos-performance-testing (性能测试)
+### ⑤ flagos-performance-testing (性能测试 — 三版对比+优化触发)
 
 | 属性 | 说明 |
 |------|------|
-| **功能** | 执行 vLLM 模型性能基准测试 |
-| **依赖** | `flagos-eval-correctness` |
-| **触发词** | `性能测试`, `benchmark`, `vllm bench`, `吞吐量测试`, `TTFT 测试`, `TPOT 测试`, `延迟测试` |
-
-**主要工作:**
-1. 从 `shared/context.yaml` 读取服务连接信息
-2. 从 `config/perf_config.yaml` 读取测试参数
-3. 执行基准测试矩阵
-4. 收集并保存结果
-
-**默认测试矩阵:**
-
-| 测试用例 | 输入长度 | 输出长度 |
-|----------|----------|----------|
-| 1k_input_1k_output | 1024 | 1024 |
-| 4k_input_1k_output | 4096 | 1024 |
-| 16k_input_1k_output | 16384 | 1024 |
-| 32k_input_1k_output | 32768 | 1024 |
-
-**采集指标:**
-- 请求吞吐量 (req/s)
-- Token 吞吐量 (tok/s)
-- TTFT (首 Token 延迟): Mean/Median/P99
-- TPOT (Token 间延迟): Mean/Median/P99
-- ITL (Token 间隔延迟): Mean/Median/P99
-
-**输出字段:**
-```yaml
-benchmark.results, benchmark.timestamp
-```
-
----
-
-### ⑥ flagos-release (发布)
-
-| 属性 | 说明 |
-|------|------|
-| **功能** | 打包并发布 Docker 镜像和模型 |
+| **功能** | 三版性能测试（Native/Full FlagGems/Optimized），并发自动搜索+早停、自动优化触发 |
 | **依赖** | `flagos-service-startup` |
-| **触发词** | `release`, `image upload`, `package image`, `model release`, `upload model`, `发布`, `镜像上传`, `模型发布` |
+| **触发词** | `性能测试`, `benchmark`, `vllm bench`, `吞吐量测试` |
 
-**发布选项:**
-1. **仅镜像** — 推送到 Harbor
-2. **仅模型** — 上传到 HuggingFace + ModelScope
-3. **完整发布** — 两者都发布
+**脚本**：
+- `benchmark_runner.py`：测试入口，支持 `--concurrency-search`、`--quick`
+- `performance_compare.py`：三版对比 + CSV 生成（`--flagos-full` 新增参数）
 
-**主要工作:**
+---
 
-**镜像发布:**
-1. 收集环境信息 (FlagOS 组件版本、CUDA、驱动等)
-2. `docker commit` 容器为镜像
-3. 按命名规范标记镜像
-4. 推送到 Harbor
+### ⑥ flagos-operator-replacement (算子替换 + 优化) — 独立工具
 
-**模型发布:**
-1. 准备 README (含基准测试结果、启动命令)
-2. 上传到 HuggingFace
-3. 上传到 ModelScope
+| 属性 | 说明 |
+|------|------|
+| **功能** | 被动排除（评测报错）+ 主动分组二分搜索优化（性能驱动） |
+| **依赖** | 无 (可随时调用) |
+| **触发词** | `operator replacement`, `replace operator`, `算子替换`, `算子优化` |
 
-**输出字段:**
-```yaml
-image.registry_url, image.upload_timestamp
-release.huggingface_url, release.modelscope_url
-```
+**脚本**：
+- `operator_optimizer.py`：分组二分搜索引擎、算子列表自动发现
+- `operator_search.py`：全自动搜索编排（next→toggle→restart→benchmark→update）
 
 ---
 
@@ -273,72 +206,105 @@ release.huggingface_url, release.modelscope_url
 
 | 属性 | 说明 |
 |------|------|
-| **功能** | 分析推理服务日志，诊断问题 |
+| **功能** | 分析日志，诊断问题，提供失败恢复指引 |
 | **依赖** | 无 (可随时调用) |
 | **触发词** | `log analysis`, `analyze logs`, `日志分析` |
 
-**主要工作:**
-1. 定位日志文件 (`service.log`, `vllm.log`, `nohup.out` 等)
-2. 检查最近日志输出
-3. 检测启动错误 (error, cuda, oom, traceback)
-4. 检测 FlagGems 执行状态
-5. 检测 GPU/内存错误
-6. 生成诊断报告和解决建议
-
-**输出字段:**
-```yaml
-diagnosis.status, diagnosis.errors, diagnosis.suggestions
-```
-
 ---
 
-## 执行顺序总结
+## 自动化程度
 
-| 顺序 | Skill | 触发条件 |
-|------|-------|----------|
-| 1 | model-introspection | 用户提供模型来源 |
-| 2 | environment-preparation | model-introspection 完成 |
-| 3 | service-startup | environment-preparation 完成 |
-| 4 | flagos-eval-correctness | service-startup 完成且服务健康 |
-| 5 | flagos-performance-testing | flagos-eval-correctness 完成 |
-| 6 | flagos-release | flagos-performance-testing 完成 (可选) |
-| - | flagos-log-analyzer | 任何阶段出现问题时调用 |
+### 无需人工介入的环节
+
+| 环节 | 说明 |
+|------|------|
+| GPU 检测 | 自动检测 10 种 GPU 厂商 |
+| 入口类型判断 | 自动识别容器名/镜像/URL |
+| FlagGems 集成方式 | 运行时多维探测 |
+| FlagGems 启停方法 | 从探测结果推导 |
+| 性能对比判断 | 自动计算比例 |
+| 是否需要算子优化 | 自动判断 < 80% 触发 |
+| 算子优化搜索 | 全自动分组二分搜索 |
+| 报告生成 | 自动生成 |
+
+### 需要人工确认的环节
+
+1. docker run 命令最终确认
+2. 是否安装 FlagTree
+3. 是否执行精度评测
+4. 搜索 3 轮仍未达标时
+5. FlagTree 安装失败时是否重新 run 容器
 
 ---
 
 ## 数据流
 
 ```
-┌──────────────────┐
-│ model-introspection │──写入──┐
-└──────────────────┘         │
-                             ↓
-                    ┌─────────────────┐
-                    │ context.yaml    │
-                    │ (共享上下文)     │
-                    └─────────────────┘
-                             ↑
-┌────────────────────────┐   │
-│ environment-preparation │──追加 (含 workspace.host_path, workspace.container_path)
-└────────────────────────┘   │
-                             ↑
-┌──────────────────┐         │
-│ service-startup  │─────追加 (含 service.log_path)
-└──────────────────┘
+┌──────────────────────────────┐
+│ container-preparation (①)    │──写入──┐
+│ (多入口: 容器/镜像/README)    │        │
+└──────────────────────────────┘        ↓
+                                ┌─────────────────┐
+                                │ context.yaml    │
+                                │ (共享上下文)     │
+                                └─────────────────┘
+                                        ↑
+┌──────────────────────────────┐        │
+│ pre-service-inspection (②)  │──追加──┤
+│ + env_report.md              │        │
+│ + flag_gems_detection.md     │        │
+│ + FlagTree 探测              │        │
+└──────────────────────────────┘        │
+                                        ↑
+┌──────────────────────────────┐        │
+│ service-startup (③ default)  │──追加──┤
+│ → 初始环境验证               │        │
+│ ④ FlagTree 安装（可选）      │        │
+│ → FlagTree 验证              │        │
+└──────────────────────────────┘        │
+         │                              ↑
+         ↓                              │
+┌──────────────────────────────┐        │
+│ performance-testing (⑥⑨⑫)   │──追加──┘
+│ + benchmark_runner.py        │
+│ + performance_compare.py     │
+│ → native_performance.json    │
+│ → flagos_full.json           │
+│ → flagos_optimized.json      │
+│ → performance_compare.csv    │
+└──────────────────────────────┘
          │
-         ↓ 读取
-┌─────────────────────────┐
-│ flagos-eval-correctness │ → 结果写入 /flagos-workspace/eval/
-└─────────────────────────┘
-         │
-         ↓ 读取
-┌───────────────────────────┐    ┌──────────────┐
-│ flagos-performance-testing│    │ flagos-release │
-│ → 结果写入 /flagos-workspace/perf/             │
-└───────────────────────────┘    └──────────────┘
+         ↓ (< 80% 自动触发)
+┌──────────────────────────────┐
+│ operator-replacement (⑪)    │
+│ + operator_optimizer.py      │
+│ + operator_search.py         │
+│ → operator_config.json       │
+└──────────────────────────────┘
+
+独立工具:
+┌──────────────────┐  ┌──────────────────┐
+│ eval-correctness │  │ log-analyzer (⑦) │
+│ (⑤⑧) 询问用户   │  │ + 失败恢复指引    │
+└──────────────────┘  └──────────────────┘
 ```
 
-**所有结果文件宿主机直接可访问**：`/data/flagos-workspace/<model_name>/`
+---
+
+## FlagTree 说明
+
+**FlagTree** 是统一 Triton 编译器，替换原版 `triton` 包（`import triton` 仍然生效）。
+
+| 属性 | 说明 |
+|------|------|
+| **仓库** | https://github.com/flagos-ai/FlagTree |
+| **版本** | 0.4.0 (Triton 3.1), 0.4.0+3.2, 0.4.0+3.3, 0.4.1+3.5 |
+| **NVIDIA 安装** | `pip install flagtree==0.4.0 --index-url=https://resource.flagos.net/repository/flagos-pypi-hosted/simple` |
+| **源码编译** | `export FLAGTREE_BACKEND=${backend_name} && cd python && pip install . --no-build-isolation -v` |
+| **支持厂商** | NVIDIA, AMD, Ascend, Cambricon, Iluvatar, MooreThreads, KLX, MetaX, HYGON, Tsingmicro, Enflame |
+| **安装脚本** | `install_flagtree.sh install\|uninstall\|verify` |
+
+在工作流步骤④中，系统会询问用户是否安装 FlagTree。安装通过 `install_flagtree.sh` 自动完成。
 
 ---
 
@@ -366,6 +332,7 @@ diagnosis.status, diagnosis.errors, diagnosis.suggestions
 | `context.yaml` | `/data/flagos-workspace/<model>/shared/context.yaml` | Skill 间共享上下文 |
 | `perf_config.yaml` | `/data/flagos-workspace/<model>/perf/config/perf_config.yaml` | 性能测试配置 |
 | `config.yaml` | `/data/flagos-workspace/<model>/eval/config.yaml` | 评测配置 |
+| `operator_config.json` | `/data/flagos-workspace/<model>/results/operator_config.json` | 算子优化状态 |
 | `skills/*/SKILL.md` | 项目目录内 | Skill 定义文件 |
 
 ---
@@ -376,15 +343,21 @@ diagnosis.status, diagnosis.errors, diagnosis.suggestions
 # 实时查看服务日志
 tail -f /data/flagos-workspace/<model>/output/**/*.log
 
+# 查看性能测试结果
+cat /data/flagos-workspace/<model>/results/native_performance.json
+cat /data/flagos-workspace/<model>/results/flagos_full.json
+cat /data/flagos-workspace/<model>/results/performance_compare.csv
+
+# 查看报告
+cat /data/flagos-workspace/<model>/reports/env_report.md
+cat /data/flagos-workspace/<model>/reports/flag_gems_detection.md
+cat /data/flagos-workspace/<model>/reports/final_report.md
+
 # 查看评测进度
 tail -f /data/flagos-workspace/<model>/eval/eval_*.log
 
-# 查看评测结果
-cat /data/flagos-workspace/<model>/eval/aime_result.json
-cat /data/flagos-workspace/<model>/eval/erqa_result.json
-
-# 查看性能测试结果
-cat /data/flagos-workspace/<model>/perf/output/benchmark_*.json
+# 查看算子优化状态
+cat /data/flagos-workspace/<model>/results/operator_config.json
 
 # 搜索错误日志
 grep -ri "error" /data/flagos-workspace/<model>/output/

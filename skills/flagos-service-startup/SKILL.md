@@ -1,7 +1,7 @@
 ---
 name: flagos-service-startup
-description: 启动模型推理服务，验证运行时环境，并验证服务健康状态
-version: 1.1.0
+description: 在容器内启动推理服务（支持 default/native/flagos 模式切换），使用 toggle_flaggems.py 和 wait_for_service.sh
+version: 5.0.0
 license: internal
 triggers:
   - service startup
@@ -10,46 +10,54 @@ triggers:
   - health check
   - 健康检查
 depends_on:
-  - flagos-environment-preparation
-next_skill: flagos-eval-correctness
+  - flagos-pre-service-inspection
+next_skill: flagos-performance-testing
 provides:
+  - service.cluster
+  - service.external_ip
   - service.host
   - service.port
-  - service.process_id
   - service.healthy
   - service.model_id
+  - service.log_path
+  - service.gems_txt_path
+  - service.initial_operator_list
+  - service.max_model_len
   - runtime.gpu_count
   - runtime.flaggems_enabled
+  - runtime.framework
+  - runtime.thinking_model
+  - environment.initial_env_verified
+  - environment.flagtree_env_verified
 ---
 
 # 服务启动 Skill
 
-此 Skill 在运行的容器内启动推理服务，验证运行时环境，并验证服务健康状态。
+支持 default/native/flagos 三种模式，基于 `flaggems_control` 探测结果动态决定启停方式。
+
+**启动模式**：
+- **default** — 不修改任何 FlagGems 状态，以容器现有配置原样启动。用于步骤③验证初始环境可用性。
+- **native** — 关闭 FlagGems，纯原生环境。
+- **flagos** — 启用全量 FlagGems。
+
+**工具脚本**（已由 setup_workspace.sh 部署到容器）:
+- `calc_tp_size.py` — TP 自动推算（根据模型大小和 GPU 显存）
+- `toggle_flaggems.py` — FlagGems 开关切换（替代 sed）
+- `wait_for_service.sh` — 服务就绪检测（指数退避）
+- `install_flagtree.sh` — FlagTree 安装/卸载/验证
 
 ---
 
 # 统一工作目录
 
-**重要**：所有服务启动操作必须在 `/flagos-workspace` 目录下执行，确保日志生成到宿主机可访问的位置。
+所有服务启动操作在 `/flagos-workspace` 目录下执行。
 
 ```
-容器内: /flagos-workspace/          ← 启动服务的工作目录
-             │
-             └── output/            ← 服务启动后自动生成
-                 └── <服务名>/
-                     └── serve/
-                         └── *.log  ← 服务日志
-
-宿主机: /data/flagos-workspace/<model_name>/output/  ← 实时同步，可直接访问
-```
-
-**宿主机实时监控日志**：
-```bash
-# 查找日志文件
-find /data/flagos-workspace/<model_name>/output -name "*.log"
-
-# 实时查看
-tail -f /data/flagos-workspace/<model_name>/output/**/*.log
+容器内: /flagos-workspace/logs/ ← 服务日志（按模式命名）
+  startup_default.log  — 步骤③ default 模式
+  startup_native.log   — 步骤⑥ native 模式
+  startup_flagos.log   — 步骤⑦ flagos 模式
+宿主机: /data/flagos-workspace/<model_name>/logs/ ← 实时同步
 ```
 
 ---
@@ -60,366 +68,403 @@ tail -f /data/flagos-workspace/<model_name>/output/**/*.log
 
 ```yaml
 container:
-  name: <来自 environment-preparation>
+  name: <来自 container-preparation>
 model:
-  name: <来自 model-introspection>
-  local_path: <来自 environment-preparation>
-  container_path: <来自 environment-preparation>
-workspace:
-  host_path: <来自 environment-preparation>
-  container_path: "/flagos-workspace"
-runtime:
-  framework: <来自 model-introspection>
-gpu:
-  vendor: <来自 environment-preparation>
-  count: <来自 environment-preparation>
-  visible_devices_env: <来自 environment-preparation>
+  name: <来自 container-preparation>
+  container_path: <来自 container-preparation>
+execution:
+  cmd_prefix: <来自 pre-service-inspection>
+flaggems_control:
+  enable_method: <来自 pre-service-inspection>
+  disable_method: <来自 pre-service-inspection>
+  integration_type: <来自 pre-service-inspection>
 ```
 
 ## 写入 shared/context.yaml
 
 ```yaml
 service:
-  host: <服务主机，通常为 localhost>
-  port: <服务端口，通常为 8000>
-  process_id: <运行中服务的 PID>
-  healthy: <true|false>
-  model_id: <API 响应中的模型标识符>
-  log_path: <服务日志路径，如 /flagos-workspace/output/.../serve/*.log>
+  cluster: <集群标识>
+  external_ip: <宿主机 IP>
+  host: <服务主机>
+  port: <服务端口>
+  healthy: true|false
+  model_id: <模型标识符>
+  log_path: <日志路径>
+  gems_txt_path: <gems.txt 路径>
+  enable_oplist_path: <flaggems_enable_oplist.txt 路径，无则为空>
+  enable_oplist_count: <oplist 中算子数量，无则为 0>
+  initial_operator_list: [...]
+  max_model_len: <服务实际的 max_model_len>
 runtime:
-  gpu_count: <可见 GPU 数量>
-  flaggems_enabled: <true|false>
+  framework: <vllm|sglang>
+  gpu_count: <GPU 数量>
+  flaggems_enabled: true|false        # 根据 oplist 文件是否存在判断，而非启动模式
+  thinking_model: true|false            # 是否为 thinking model（传递给后续评测 Skill）
 ```
 
 ---
 
 # 工作流程
 
-## 阶段一：环境检查（启动前）
-
-### 步骤 1 — 进入容器
+## 步骤 1 — 停止现有服务
 
 ```bash
-docker exec -it <container_name> /bin/bash
+# 推荐方式：docker restart 确保资源完全释放（避免僵尸进程占用显存）
+docker restart $CONTAINER
+sleep 5
 ```
 
-结果反馈：
-
-- 成功进入容器
-
----
-
-### 步骤 2 — 检查 GPU
-
-根据 context.yaml 中的 `gpu.vendor` 使用对应检测命令：
-
-| 厂商 | 检测命令 |
-|------|----------|
-| NVIDIA | `nvidia-smi` |
-| 华为 (Ascend) | `npu-smi info` |
-| 海光 (Hygon) | `hy-smi` |
-| 摩尔线程 | `mthreads-gmi` |
-| 昆仑芯 | `xpu-smi` |
-| 天数 | `ixsmi` |
-| 沐曦 | `mx-smi` |
-| 清微智能 | `tsm_smi` 或 `source /root/.bash_profile && tsm_smi -t` |
-| 寒武纪 | `cnmon` |
-
-示例（NVIDIA）：
-
+备选方式（仅当不能重启容器时）：
 ```bash
-nvidia-smi
+docker exec $CONTAINER bash -c "pkill -f 'vllm\|sglang\|flagscale' 2>/dev/null; sleep 3"
 ```
 
-示例（华为）：
+## 步骤 2 — 切换 FlagGems 状态
 
+根据启动模式调用 `toggle_flaggems.py`：
+
+**Default 模式**（不修改任何状态）：
+不调用 `toggle_flaggems.py`，直接跳到步骤 3。用于步骤③验证初始环境可用性。
+
+**Native 模式**（关闭 FlagGems）：
+
+非 plugin 场景：
 ```bash
-npu-smi info
+docker exec $CONTAINER python3 /flagos-workspace/scripts/toggle_flaggems.py --action disable --json
 ```
 
-结果反馈：
-
-- GPU 厂商
-- GPU 可见性
-- GPU 数量
-- 显存大小
-
----
-
-### 步骤 3 — 检查运行时环境
-
-检查关键软件包版本：
-
+Plugin 场景：
 ```bash
-pip show torch vllm sglang flag-gems 2>/dev/null | grep -E "^(Name|Version):"
+docker exec $CONTAINER python3 /flagos-workspace/scripts/toggle_flaggems.py --action disable --integration-type plugin --json
+```
+输出 JSON 包含 `env_vars` 和 `env_inline` 字段，在启动命令中使用 `env_inline` 作为内联前缀。
+
+**FlagOS 模式**（启用 FlagGems）：
+
+非 plugin 场景：
+```bash
+docker exec $CONTAINER python3 /flagos-workspace/scripts/toggle_flaggems.py --action enable --json
 ```
 
-或详细列表：
-
+Plugin 场景：
 ```bash
-pip list | grep -iE "(torch|vllm|sglang|flag|gems)"
+docker exec $CONTAINER python3 /flagos-workspace/scripts/toggle_flaggems.py --action enable --integration-type plugin --json
 ```
 
-重要软件包：
+**如果 integration_type 为 env_var**，则通过环境变量控制（不修改代码）：
+- 读取 `flaggems_control.enable_method` / `disable_method`，在启动命令前加对应环境变量。
 
-- torch
-- vllm / sglang
-- flag-gems
+## 步骤 2.5 — TP 自动推算
 
-结果反馈：
-
-- 软件包版本列表
-
----
-
-### 步骤 4 — 检测 FlagGems 集成状态
-
-**此步骤必须在启动服务前完成，决定是否启用算子替换。**
-
-检测方法：
-
-1. 检查 flag-gems 是否安装：
+在启动服务前，自动推算最小可用 `--tensor-parallel-size`：
 
 ```bash
-pip show flag_gems
+docker exec $CONTAINER python3 /flagos-workspace/scripts/calc_tp_size.py --model-path $MODEL_PATH --json
 ```
 
-2. 检查 vLLM/SGLang 是否集成了 FlagGems：
-
-```bash
-# 获取 vllm 安装路径
-VLLM_PATH=$(pip show vllm | grep Location | cut -d' ' -f2)/vllm
-
-# 搜索 gems 相关代码
-grep -r "flag_gems\|gems" $VLLM_PATH --include="*.py" | head -20
+输出示例：
+```json
+{
+  "recommended_tp": 1,
+  "gpu_count": 8,
+  "gpu_memory_gb": 80.0,
+  "model_size_gb": 15.2,
+  "estimated_required_gb": 18.2,
+  "reason": "模型 15.2GB，单卡 80GB 显存充足，推荐 TP=1"
+}
 ```
 
-3. 检查环境变量配置：
+**使用规则**：
+- 读取 `recommended_tp` 作为 `${TP_SIZE}` 的值
+- 如果脚本执行失败（退出码非 0），fallback 到 GPU 总数
+- 如果推荐 TP 启动后 OOM，自动翻倍重试（TP×2），直到 GPU 总数
 
+将推荐值写入 context.yaml 的 `runtime.tp_size` 和 `runtime.tp_reason`。
+
+## 步骤 3 — 启动服务
+
+**非 plugin 场景**：
 ```bash
-echo $USE_FLAGGEMS
+docker exec -d $CONTAINER bash -c "cd /flagos-workspace && <startup_command> > /flagos-workspace/logs/startup_<mode>.log 2>&1"
 ```
 
-结果反馈：
-
-- FlagGems 安装状态：已安装 / 未安装
-- 框架集成状态：已集成 / 未集成
-- 建议：是否启用 FlagGems 算子替换
-
----
-
-### 步骤 5 — 询问用户是否启用 FlagGems
-
-根据步骤 4 的检测结果，询问用户：
-
-**如果检测到 FlagGems 可用：**
-
-"检测到 FlagGems 已集成，是否启用算子替换？"
-
-选项：
-1. 启用 FlagGems（推荐）
-2. 不启用 FlagGems
-3. 用户自定义配置
-
-**如果未检测到 FlagGems：**
-
-告知用户 FlagGems 不可用，将使用原生算子。
-
----
-
-## 阶段二：生成并执行启动命令
-
-### 步骤 6 — 确定启动命令
-
-根据前面的检测结果、GPU 厂商和用户选择，生成启动命令。
-
-### 环境变量设置
-
-根据 GPU 厂商设置可见设备环境变量：
-
-| 厂商 | 环境变量 | 示例 |
-|------|----------|------|
-| NVIDIA | `CUDA_VISIBLE_DEVICES` | `CUDA_VISIBLE_DEVICES=0,1` |
-| 华为 | `ASCEND_RT_VISIBLE_DEVICES` | `ASCEND_RT_VISIBLE_DEVICES=0,1` |
-| 海光 | `HIP_VISIBLE_DEVICES` | `HIP_VISIBLE_DEVICES=0,1` |
-| 摩尔线程 | `MUSA_VISIBLE_DEVICES` | `MUSA_VISIBLE_DEVICES=0,1` |
-| 昆仑芯 | `XPU_VISIBLE_DEVICES` | `XPU_VISIBLE_DEVICES=0,1` |
-| 天数 | `CUDA_VISIBLE_DEVICES` | `CUDA_VISIBLE_DEVICES=0,1` |
-| 沐曦 | `CUDA_VISIBLE_DEVICES` | `CUDA_VISIBLE_DEVICES=0,1` |
-| 清微智能 | `TXDA_VISIBLE_DEVICES` | `TXDA_VISIBLE_DEVICES=0,1` |
-| 寒武纪 | `MLU_VISIBLE_DEVICES` | `MLU_VISIBLE_DEVICES=0,1` |
-| 平头哥 | `CUDA_VISIBLE_DEVICES` | `CUDA_VISIBLE_DEVICES=0,1` |
-
-### 启动命令模板
-
-**vLLM 示例（启用 FlagGems）：**
-
+**Plugin 场景**（内联环境变量前缀）：
 ```bash
-USE_FLAGGEMS=1 <VISIBLE_DEVICES_ENV>=0,1,2,3 vllm serve <model_path> \
-  --served-model-name <model_name> \
-  --tensor-parallel-size <gpu_count> \
-  --port 8000
+docker exec -d $CONTAINER bash -c "cd /flagos-workspace && PATH=/opt/conda/bin:\$PATH <env_inline> <startup_command> > /flagos-workspace/logs/startup_<mode>.log 2>&1"
 ```
 
-**vLLM 示例（不启用 FlagGems）：**
+其中 `<mode>` 为 `default`、`native` 或 `flagos`，`<env_inline>` 来自 `toggle_flaggems.py --json` 输出的 `env_inline` 字段。
+
+### Plugin 场景 vllm 服务启动模板
+
+Plugin 环境下服务启动命令统一使用标准 vllm 格式，FlagGems 控制通过**内联环境变量**注入，与启动命令分离。
 
 ```bash
-USE_FLAGGEMS=0 <VISIBLE_DEVICES_ENV>=0,1,2,3 vllm serve <model_path> \
-  --served-model-name <model_name> \
-  --tensor-parallel-size <gpu_count> \
-  --port 8000
+vllm serve ${MODEL_PATH} \
+    --host 0.0.0.0 \
+    --port ${PORT:-8000} \
+    --served-model-name ${MODEL_NAME} \
+    --tensor-parallel-size ${TP_SIZE} \
+    --max-num-batched-tokens ${MAX_BATCHED_TOKENS:-16384} \
+    --max-num-seqs ${MAX_NUM_SEQS:-256} \
+    --max-model-len ${MAX_MODEL_LEN:-8192} \
+    --trust-remote-code
 ```
 
-**SGLang 示例（启用 FlagGems）：**
+**可选参数**（按需添加）：
+
+| 参数 | 场景 | 示例 |
+|------|------|------|
+| `--pipeline-parallel-size` | 多机或超大模型 | `--pipeline-parallel-size 2` |
+| `--gpu-memory-utilization` | 需限制显存占用 | `--gpu-memory-utilization 0.8` |
+| `--reasoning-parser` | Thinking model | `--reasoning-parser qwen3` |
+
+**四种模式启动方式**：
 
 ```bash
-USE_FLAGGEMS=1 <VISIBLE_DEVICES_ENV>=0,1,2,3 python -m sglang.launch_server \
-  --model-path <model_path> \
-  --port 8000
+# Default（不修改环境，原样启动）
+docker exec -d $CONTAINER bash -c "cd /flagos-workspace && PATH=/opt/conda/bin:\$PATH vllm serve ... > /flagos-workspace/logs/startup_default.log 2>&1"
+
+# Native（关闭 FlagGems）
+docker exec -d $CONTAINER bash -c "cd /flagos-workspace && PATH=/opt/conda/bin:\$PATH USE_FLAGGEMS=0 VLLM_FL_PREFER_ENABLED=false vllm serve ... > /flagos-workspace/logs/startup_native.log 2>&1"
+
+# FlagOS Full（全量 FlagGems）
+docker exec -d $CONTAINER bash -c "cd /flagos-workspace && PATH=/opt/conda/bin:\$PATH USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true vllm serve ... > /flagos-workspace/logs/startup_flagos.log 2>&1"
+
+# FlagOS Optimized（自定义 blacklist）
+docker exec -d $CONTAINER bash -c "cd /flagos-workspace && PATH=/opt/conda/bin:\$PATH USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true VLLM_FL_FLAGOS_BLACKLIST='mm,softmax' vllm serve ... > /flagos-workspace/logs/startup_flagos.log 2>&1"
 ```
 
-向用户展示生成的命令，允许用户：
+四种模式差异仅在内联环境变量前缀（由 `toggle_flaggems.py` 或 `apply_op_config.py` 的 JSON 输出中的 `env_inline` 提供）。
 
-- 批准
-- 修改参数（如指定特定 GPU 卡）
-- 完全替换
+**模板使用规则**：
+- 具体参数值从容器 README / 用户输入 / context.yaml 获取
+- `--served-model-name` 默认使用模型目录名
+- `--tensor-parallel-size` 默认使用 `calc_tp_size.py` 的推荐值（基于模型大小和单卡显存自动推算），fallback 到 GPU 总数
+- 业务环境变量（`VLLM_USE_MODELSCOPE` 等）按需在 docker exec 中追加，不写入模板
 
----
+### max_model_len 决策规则
 
-### 步骤 7 — 执行启动命令
+`--max-model-len` 直接决定模型单次请求能处理的最大 token 数。**如果设置过小，评测端请求的 `max_tokens` 会被服务端截断，导致推理不完整。**
 
-**重要**：必须先 `cd` 到工作目录，确保 `output/` 日志目录生成在挂载路径下。
+**决策逻辑**：
 
-用户确认后，后台执行启动命令：
+1. **判断是否为 thinking model**：
+   - 模型名包含 `Qwen3` / `QwQ` / `DeepSeek-R1` / `DeepSeek-R2` → thinking model
+   - 其他 → 标准模型
+
+2. **根据模型类型选择 max_model_len**：
+
+| 模型类型 | 推荐 max_model_len | 原因 |
+|---------|-------------------|------|
+| Thinking model | **32768** 或更高 | thinking chain 需要 30000+ tokens，需留余量给 prompt |
+| 标准 LLM（性能测试） | **8192** | 性能测试使用固定 input/output 长度，够用即可 |
+| 标准 LLM（精度评测） | **8192** | 非 thinking 模型的评测 max_tokens=8192 |
+
+3. **显存约束**：
+   - `max_model_len` 越大，vLLM 预分配的 KV cache 显存越多
+   - 如果 GPU 显存不足导致 OOM，优先降低 `max_model_len`
+   - Thinking model 最低不应低于 **16384**（否则推理链严重截断）
+
+4. **具体参数**：
 
 ```bash
-# 在容器内的工作目录下启动服务
-docker exec <container_name> bash -c "cd /flagos-workspace && <startup_command>"
+# Thinking model（如 Qwen3-8B）
+vllm serve <model_path> --max-model-len 32768 ...
+
+# 标准模型（性能测试场景）
+vllm serve <model_path> --max-model-len 8192 ...
+
+# 显存不足时的降级
+vllm serve <model_path> --max-model-len 16384 ...  # thinking model 最低线
 ```
 
-**完整示例（vLLM）**：
+5. **验证**：启动后 `wait_for_service.sh` 会输出实际的 `max_model_len`，确认与预期一致。如果评测场景需要 `max_tokens=30000`，则 `max_model_len` 必须 > 30000 + prompt_tokens。
+
+## 步骤 4 — 等待服务就绪
 
 ```bash
-docker exec <container_name> bash -c "cd /flagos-workspace && USE_FLAGGEMS=1 CUDA_VISIBLE_DEVICES=0,1,2,3 vllm serve <model_path> --served-model-name <model_name> --tensor-parallel-size 4 --port 8000"
+# Native 模式 / Default 模式
+docker exec $CONTAINER bash -c "/flagos-workspace/scripts/wait_for_service.sh --port $PORT --model-name '$MODEL_NAME' --timeout 300"
+
+# FlagGems 模式（CUDA graph 编译慢，需更长超时）
+docker exec $CONTAINER bash -c "/flagos-workspace/scripts/wait_for_service.sh --port $PORT --model-name '$MODEL_NAME' --timeout 600"
 ```
 
-等待服务启动（约 30-60 秒），**在宿主机直接查看日志**：
+自动轮询（2s→4s→5s 快速收敛，最大间隔 5s），超时自动分析日志。
+
+**启动后校验**：检查 `wait_for_service.sh` 输出的 `max_model_len`：
+- 如果是 thinking model 且 `max_model_len < 32768` → 警告，建议重启并加大 `--max-model-len`
+- 如果 `max_model_len < 8192` → 评测可能出问题，必须修正
+
+## 步骤 5 — 服务验证
 
 ```bash
-# 查找生成的日志文件
-find /data/flagos-workspace/<model_name>/output -name "*.log"
-
-# 实时查看日志（无需 docker exec）
-tail -f /data/flagos-workspace/<model_name>/output/**/*.log
-```
-
-结果反馈：
-
-- 启动命令
-- 进程 PID
-- **日志文件路径（宿主机）**
-
----
-
-## 阶段三：服务验证（启动后）
-
-### 步骤 8 — 检查进程状态
-
-```bash
-ps -ef | grep -E "vllm|sglang" | grep -v grep
-```
-
-结果反馈：
-
-- 进程 ID
-- 进程状态（运行中 / 已退出）
-
----
-
-### 步骤 9 — 查询模型 API
-
-等待服务完全启动后，查询模型列表：
-
-```bash
-curl -s http://localhost:8000/v1/models | jq .
-```
-
-结果反馈：
-
-- API 响应状态
-- 已加载模型列表
-
----
-
-### 步骤 10 — 运行推理测试
-
-发送简单推理请求验证服务：
-
-```bash
-curl -s http://localhost:8000/v1/chat/completions \
+curl -s http://localhost:$PORT/v1/models | python3 -m json.tool
+curl -s http://localhost:$PORT/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{
-    "model": "<model_name>",
-    "messages": [{"role": "user", "content": "hello"}],
-    "max_tokens": 10
-  }' | jq .
+  -d '{"model": "<model_name>", "messages": [{"role": "user", "content": "hello"}], "max_tokens": 10}'
 ```
 
-结果反馈：
+## 步骤 6 — 探测宿主机 IP 和输出连接信息
 
-- 推理是否成功
-- 响应延迟
+```
+============================================================
+服务连接信息
+============================================================
+<集群, IP, 服务端口, 模型名称>
+评测接口: http://${EXTERNAL_IP}:${PORT}/v1/chat/completions
+启动模式: native / flagos
+============================================================
+```
+
+## 步骤 7 — 检查算子列表（每次启动后，强制）
+
+**每次服务启动后（无论 default/native/flagos 模式），都必须检查 `flaggems_enable_oplist.txt`。**
+
+该文件是 FlagGems 运行时自动生成的**唯一权威算子列表**，路径默认为 `/tmp/flaggems_enable_oplist.txt`。
+
+```bash
+# 检查 oplist 文件
+docker exec $CONTAINER bash -c "
+if [ -f /tmp/flaggems_enable_oplist.txt ]; then
+    echo 'OPLIST_FOUND: /tmp/flaggems_enable_oplist.txt'
+    echo 'OPLIST_MTIME:' \$(stat -c %Y /tmp/flaggems_enable_oplist.txt)
+    echo 'OPLIST_COUNT:' \$(wc -l < /tmp/flaggems_enable_oplist.txt)
+    cat /tmp/flaggems_enable_oplist.txt
+else
+    echo 'OPLIST_NOT_FOUND'
+fi
+"
+```
+
+**判断逻辑**：
+
+| 文件状态 | 含义 | 后续操作 |
+|----------|------|----------|
+| 存在且有内容 | FlagGems 实际在运行 | 以此文件内容为当前生效算子列表，同步到 `results/ops_list.json` |
+| 不存在或为空 | FlagGems 未启用 | 不依赖任何缓存的算子列表 |
+
+**文件存在时**：
+
+```bash
+# 以 oplist 文件为准，同步保存到 results/ops_list.json
+docker exec $CONTAINER python3 /flagos-workspace/scripts/operator_optimizer.py discover \
+  --save-ops /flagos-workspace/results/ops_list.json
+```
+
+**关键原则**：
+- `flaggems_enable_oplist.txt` = 当前实际生效的算子列表，**唯一权威来源**
+- `results/ops_list.json` 是此文件的持久化副本，供后续对比和报告使用
+- 如果启动模式为 flagos 但文件不存在 → 异常，需排查（服务可能未正确加载 FlagGems）
+- 如果启动模式为 native 但文件存在 → 可能是上次 flagos 的残留，不应作为当前算子列表
+- 每次 FlagGems 重新启动都会**重新生成**此文件，内容反映最新的算子配置（含 blacklist 生效后的结果）
+
+**反馈输出**：
+```
+# FlagGems 运行时
+算子列表验证：
+  oplist 文件: /tmp/flaggems_enable_oplist.txt
+  当前生效算子: XX 个
+  已同步到: /flagos-workspace/results/ops_list.json
+
+# FlagGems 未运行时
+算子列表检查: oplist 文件不存在，FlagGems 未启用
+```
+
+## 步骤 8 — 写入 context.yaml
+
+写入 `environment` 字段（步骤③ default 模式时）：
+```yaml
+environment:
+  initial_env_verified: true    # 步骤③通过后设为 true
+  has_plugin: <from inspection>
+  has_flagtree: <from flagtree.installed>
+```
 
 ---
 
-### 步骤 11 — 验证 FlagGems 执行（如已启用）
+# FlagTree 安装验证流程（步骤④b）
 
-如果启用了 FlagGems，**在宿主机**检查日志确认算子替换生效：
+当用户选择安装 FlagTree 后，需要重启服务验证：
+
+## 1. 安装 FlagTree
 
 ```bash
-# 在宿主机直接查看日志（无需 docker exec）
-grep -ri "gems\|flag_gems" /data/flagos-workspace/<model_name>/output/ | head -10
+docker exec $CONTAINER bash /flagos-workspace/scripts/install_flagtree.sh install --vendor $GPU_VENDOR
 ```
 
-典型输出模式：
+## 2. 验证安装
 
-```
-flag_gems.ops loaded
-GEMS MUL
-GEMS RECIPROCAL
+```bash
+docker exec $CONTAINER bash /flagos-workspace/scripts/install_flagtree.sh verify
 ```
 
-结果反馈：
+## 3. 重启服务（default 模式）
 
-- FlagGems 是否实际生效
+停止现有服务 → 启动（不修改 FlagGems 状态）→ 等待就绪 → API 验证
+
+## 4. 判断结果
+
+- **成功**：写入 `environment.flagtree_env_verified: true`，`environment.flagtree_installed_by_us: true`
+- **失败**：触发恢复流程
+
+---
+
+# FlagTree 安装失败恢复（步骤④c）
+
+**⚠️ 强制规则**：FlagTree 安装失败后，禁止在当前容器上继续任何操作（环境已被污染）。
+必须立即执行以下恢复流程，然后从步骤③重新开始。
+
+**优先方案**：重新 `docker run` 新容器
+- 使用 context.yaml 中的 `image` 信息重新创建
+- 需要用户确认（docker run 属于危险操作）
+- 重新执行步骤①②③
+
+**备选方案**（特殊环境如阿里云不能重建容器）：
+```bash
+docker exec $CONTAINER bash /flagos-workspace/scripts/install_flagtree.sh uninstall
+```
+- 卸载 FlagTree 恢复原始 triton
+- 验证服务能否正常启动
+- 写入 `environment.flagtree_env_verified: false`
+
+---
+
+# 失败恢复
+
+如果 flagos 模式启动失败：
+1. 保存失败日志
+2. 自动切回 Native 验证
+3. Native 也失败 → 报告环境问题；Native 成功 → 确认是 FlagGems 问题
 
 ---
 
 # 完成条件
 
-服务启动成功的标志：
-
-- GPU 可见且数量正确
-- 运行时环境已验证
-- FlagGems 状态已确认（启用/禁用）
+- 启动模式已确认（native / flagos）
 - 服务进程正在运行
-- **日志文件已生成在 `/flagos-workspace/output/` 目录**
-- **宿主机可直接访问日志文件**
 - API /v1/models 可访问
 - 推理测试通过
-- （如启用）FlagGems 算子替换已生效
+- 已输出服务连接信息
+- gems.txt 已检查（flagos 模式）
+- context.yaml 已更新
+- 对应 trace 文件已写入：
+  - default 模式 → `traces/03_service_startup_default.json`
+  - native 模式（步骤⑥前）→ 记录在 `traces/06_perf_native.json` 的 actions 中
+  - flagos 模式 → `traces/07_service_startup_flagos.json`
 
 ---
 
 # 故障排查
 
-如果启动失败，参考 `flagos-log-analyzer` skill 进行日志分析。
-
-常见问题：
-
 | 症状 | 可能原因 | 解决方案 |
 |------|----------|----------|
-| 进程启动后立即退出 | GPU 显存不足 | 减少 tensor-parallel-size 或使用更小模型 |
-| API 无响应 | 端口被占用 | 检查 `lsof -i:8000` 并更换端口 |
-| FlagGems 未生效 | 环境变量未设置 | 确认 `USE_FLAGGEMS=1` |
-| 模型加载失败 | 路径错误 | 检查模型路径是否正确挂载 |
+| 进程启动后立即退出 | GPU 显存不足 | 自动将 TP 翻倍重试（TP×2），或降低 max-model-len |
+| API 无响应 | 端口被占用 | 检查 `lsof -i:$PORT` |
+| FlagGems 未生效 | toggle_flaggems.py 未正确切换 | 运行 `--action status` 检查 |
+| gems.txt 未生成 | FlagGems 未启用 | 确认 toggle 状态 |
+| 服务启动超时 | wait_for_service.sh 会自动诊断 | 查看超时输出的日志分析 |
+| Thinking model 评测分数异常低 | max_model_len 过小，推理链被截断 | 重启服务，加大 `--max-model-len` 至 32768+ |
+| OOM: max_model_len 过大 | KV cache 显存预分配超限 | 降低 max-model-len（thinking model 最低 16384） |

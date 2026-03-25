@@ -1,0 +1,136 @@
+analysis_report: false
+api_url: http://localhost:8000/v1
+chat_template: null
+dataset_args:
+  musr:
+    aggregation: mean
+    data_statistics: null
+    dataset_id: AI-ModelScope/MuSR
+    default_subset: default
+    description: '
+
+      ## Overview
+
+
+      MuSR (Multistep Soft Reasoning) is a benchmark for evaluating complex reasoning
+      abilities through narrative-based problems. It includes murder mysteries, object
+      placements, and team allocation scenarios requiring multi-step inference.
+
+
+      ## Task Description
+
+
+      - **Task Type**: Complex Reasoning (Multiple-Choice)
+
+      - **Input**: Narrative scenario with question and answer choices
+
+      - **Output**: Correct answer letter (A-F)
+
+      - **Domains**: Murder mysteries, object tracking, team allocation
+
+
+      ## Key Features
+
+
+      - Narrative-based reasoning problems
+
+      - Requires multi-step logical inference
+
+      - Three distinct reasoning domains
+
+      - Tests constraint satisfaction and deduction
+
+      - Longer context requiring careful reasoning
+
+
+      ## Evaluation Notes
+
+
+      - Default configuration uses **0-shot** evaluation
+
+      - Uses Chain-of-Thought (CoT) prompting
+
+      - Three subsets: `murder_mysteries`, `object_placements`, `team_allocation`
+
+      - Simple accuracy metric
+
+      - Challenging benchmark requiring careful reading
+
+      '
+    eval_split: test
+    extra_params: {}
+    few_shot_num: 0
+    few_shot_prompt_template: null
+    few_shot_random: false
+    filters: null
+    force_redownload: false
+    metric_list:
+    - acc
+    name: musr
+    output_types:
+    - generation
+    paper_url: null
+    pretty_name: MuSR
+    prompt_template: 'Answer the following multiple choice question. The last line
+      of your response should be of the following format: ''ANSWER: [LETTER]'' (without
+      quotes) where [LETTER] is one of {letters}. Think step by step before answering.
+
+
+      {question}
+
+
+      {choices}'
+    query_template: null
+    review_timeout: null
+    sample_example: null
+    sandbox_config: {}
+    shuffle: false
+    shuffle_choices: false
+    subset_list:
+    - murder_mysteries
+    - object_placements
+    - team_allocation
+    system_prompt: null
+    tags:
+    - Reasoning
+    - MCQ
+    train_split: null
+dataset_dir: /flagos-workspace/eval/datasets/evalscope_cache
+dataset_hub: modelscope
+datasets:
+- musr
+debug: false
+enable_progress_tracker: false
+eval_backend: Native
+eval_batch_size: 64
+eval_config: null
+eval_type: openai_api
+evalscope_version: 1.5.0
+generation_config:
+  batch_size: 64
+  max_tokens: 8192
+  n: 1
+  stream: true
+  temperature: 0.0
+  timeout: 60000
+  top_p: 1.0
+ignore_errors: false
+judge_model_args: {}
+judge_strategy: auto
+judge_worker_num: 1
+limit: null
+model: /nfs/models/Qwen3-8B/
+model_args: {}
+model_id: untitled
+model_task: text_generation
+no_timestamp: false
+repeats: 1
+rerun_review: false
+sandbox_manager_config: {}
+sandbox_type: docker
+seed: 42
+stream: true
+timeout: 60000
+use_cache: null
+use_sandbox: false
+work_dir: outputs/evalscope/musr/20260315_184301

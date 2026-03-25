@@ -1,193 +1,385 @@
 ---
-name: performance-testing
-description: vLLM 模型性能基准测试工具
-version: 2.1.0
+name: flagos-performance-testing
+description: 三版性能基准测试（Native / Full FlagGems / Optimized FlagGems），四档策略（quick/fast/comprehensive/fixed）、可选 final-burst、per-test-case 超时、标准 markdown 输出格式
+version: 7.1.0
 triggers:
   - 性能测试
   - benchmark
   - vllm bench
   - 吞吐量测试
+  - performance test
 depends_on:
-  - flagos-eval-correctness
-next_skill: flagos-release
+  - flagos-service-startup
+next_skill: null
+provides:
+  - native_perf.result_path
+  - native_perf.output_throughput
+  - native_perf.total_throughput
+  - flagos_full_perf.result_path
+  - flagos_optimized_perf.result_path
 ---
 
 # 性能测试 Skill
 
----
+支持三版自动化性能测试：Native → Full FlagGems → Optimized FlagGems（如需优化），标准 markdown 三列表格输出。
 
-# 统一工作目录
+**四档测试策略**（`--strategy` 参数）：
 
-**重要**：所有性能测试在 `/flagos-workspace/perf` 目录下执行，结果生成到宿主机可访问的位置。
+| strategy | 含义 | 用例选择 | 并发行为 | 样本量 |
+|----------|------|----------|----------|--------|
+| `quick` | 烟雾测试 | 只跑 `4k_input_1k_output` + max | 所有 levels 到 256，不早停 + final-burst | `num_prompts=concurrency` |
+| `fast` | 饱和即停（默认） | 所有 enabled 用例 | 按 `early_stop` 配置决定 | `num_prompts=concurrency` |
+| `comprehensive` | 全跑 | 所有 enabled 用例 | 所有并发全跑，强制不早停 | `num_prompts=concurrency` |
+| `fixed` | 固定并发 | 只跑有 `fixed_concurrency` 的用例 | 只跑配置的固定并发级别 | `num_prompts=concurrency` |
 
-```
-容器内: /flagos-workspace/perf/
-             ├── perf.py
-             ├── config/
-             │   └── perf_config.yaml
-             └── output/
-                 └── benchmark_*.json  ← 测试结果
+**所有档统一 `num_prompts=concurrency`**，因此 quick 产出的 `4k_input_1k_output` 数据可直接复用，全量测试无需重跑该用例。
 
-宿主机: /data/flagos-workspace/<model_name>/perf/  ← 实时同步
-```
+**策略选择**：在流程开始前询问用户选择 strategy，一旦选定，整个流程的所有性能测试统一使用同一策略。
 
-**宿主机查看结果**：
-```bash
-# 无需 docker exec，宿主机直接查看
-ls /data/flagos-workspace/<model_name>/perf/output/
-cat /data/flagos-workspace/<model_name>/perf/output/benchmark_*.json
-```
+**Fixed 策略**：用于快速测试特定场景，跳过并发搜索。在 `perf_config.yaml` 中为测试用例添加 `fixed_concurrency` 字段即可：
 
----
+```yaml
+- name: "1k_input_1k_output"
+  input_len: 1024
+  output_len: 1024
+  enabled: true
+  fixed_concurrency: 64  # fixed 策略时只跑并发 64
 
-## ⚠️ 强制约束（必须严格遵守）
-
-**你必须且只能通过以下方式执行性能测试：**
-
-```bash
-python perf.py --config config/perf_config.yaml
+- name: "32k_input_1k_output"
+  input_len: 32768
+  output_len: 1024
+  enabled: true
+  fixed_concurrency: 1   # fixed 策略时只跑并发 1
 ```
 
-**绝对禁止：**
-- ❌ 直接运行 `vllm bench serve` 或任何其他基准测试命令
-- ❌ 自行编写测试脚本或代码
-- ❌ 创建任何 .py/.sh 文件
-- ❌ 绕过 perf.py 执行测试
+**Final Burst**：默认不跑。用户显式传入 `--final-burst` 才追加无限制并发大规模测试。一旦用户选择了 `--final-burst`，后续同流程的所有性能测试都加此 flag。
 
-**唯一允许的操作：**
-- ✅ 修改 `config/perf_config.yaml` 调整测试参数
-- ✅ 运行 `python perf.py` 及其参数
+**三版结果文件**：
+- `native_performance.json` — Native（无 FlagGems）
+- `flagos_full.json` — Full FlagGems（全量算子）
+- `flagos_optimized.json` — Optimized FlagGems（≥80% 组合，如需优化才产出）
 
-**违反上述约束将导致测试结果无效。**
+**工具脚本**（已由 setup_workspace.sh 部署到容器）:
+- `benchmark_runner.py` — 性能测试（`--strategy quick/fast/comprehensive/fixed` + 可选 `--final-burst`）
+- `performance_compare.py` — 性能对比（`--format markdown` 标准三列表格输出）
 
 ---
 
-## 文件结构
+## 强制约束
 
+**只能通过 `benchmark_runner.py` 执行性能测试**，禁止直接运行 `vllm bench serve`。
+
+**启动前互斥检查**：性能测试启动前，必须确认没有正在运行的精度评测进程。并发执行会互相抢占 GPU 资源，导致结果不可信。
+
+```bash
+# 检查是否有评测进程在运行（eval_aime.py / eval_erqa.py / eval_monitor.py）
+docker exec $CONTAINER bash -c "pgrep -f 'eval_aime\|eval_erqa\|eval_monitor' && echo 'BLOCKED: 评测进程运行中，等待结束' && exit 1 || echo 'OK: 无评测进程'"
 ```
-flagos-performance-testing/
-├── SKILL.md              # 本文件
-├── perf.py               # 测试入口（只读）
-├── config/
-│   └── perf_config.yaml  # 测试配置（可编辑）
-└── output/               # 结果输出
-```
+
+如果检测到评测进程，**必须等待其结束后再启动性能测试**，禁止强杀评测进程。
+
+**策略触发规则**：
+- 用户说"快速测试"/"走通流程"/"smoke test"/"验证流程"→ `--strategy quick`
+- 用户说"完整测试"/"全量"/"所有并发"→ `--strategy comprehensive`
+- 用户说"只测试特定场景"/"固定并发"/"1k-1k-64"→ `--strategy fixed`
+- 默认（或用户说"正常测试"/"标准"）→ `--strategy fast`
 
 ---
 
-## 执行流程
+# Triton Cache 保护
 
-### 步骤 1：复制测试工具到容器工作目录
-
-```bash
-# 在宿主机执行
-CONTAINER=<container_name>
-
-# 复制测试脚本和配置到工作目录
-docker cp skills/flagos-performance-testing/perf.py $CONTAINER:/flagos-workspace/perf/
-docker cp skills/flagos-performance-testing/config/. $CONTAINER:/flagos-workspace/perf/config/
-```
-
-### 步骤 2：同步配置信息
-
-从 `shared/context.yaml` 读取以下字段，填充到 `/flagos-workspace/perf/config/perf_config.yaml`：
-
-| context.yaml 字段 | perf_config.yaml 字段 |
-|-------------------|----------------------|
-| `service.host` | `server.host` |
-| `service.port` | `server.port` |
-| `model.name` 或 `model.container_path` | `model.name` |
-| `model.tokenizer_path` 或 `model.container_path` | `model.tokenizer_path` |
-
-**可直接在宿主机编辑配置**：
+**警告**：在算子替换后重启服务时，Triton JIT cache 可能导致旧的 kernel 被使用。
 
 ```bash
-# 宿主机直接编辑（无需 docker exec）
-vim /data/flagos-workspace/<model_name>/perf/config/perf_config.yaml
+# 清除 Triton cache（在每次算子配置变更后）
+${CMD_PREFIX} rm -rf ~/.triton/cache/ 2>/dev/null
+${CMD_PREFIX} rm -rf /tmp/triton_cache/ 2>/dev/null
 ```
 
-**注意**：容器内服务地址通常为 `127.0.0.1` 或 `localhost`
+**何时需要清除**：
+- 算子替换后重启服务前
+- FlagGems 升级后重启服务前
+- 性能测试结果异常时排查
 
-### 步骤 3：调整测试矩阵（如需要）
+---
 
-根据模型的 `max_model_len` 禁用超出范围的测试用例：
+# Plugin 场景的算子覆盖率检查
+
+当 `vllm_plugin_installed=true` 时，在性能测试前检查算子覆盖率：
+
+```bash
+# 检查 FlagGems 实际覆盖了多少 aten 算子
+${CMD_PREFIX} python3 -c "
+import json
+try:
+    import flag_gems
+    flag_gems.enable()
+    ops = list(flag_gems.all_registered_ops()) if hasattr(flag_gems, 'all_registered_ops') else []
+    print(json.dumps({'covered_ops': len(ops), 'ops': sorted(ops)}))
+except Exception as e:
+    print(json.dumps({'error': str(e)}))
+"
+```
+
+如果覆盖率很低（< 20 个算子），FlagOS 加速效果可能有限，应在报告中注明。
+
+---
+
+# 工作流程
+
+## 核心原则：三版测试 + 按需优化
+
+新工作流按固定顺序执行三版测试：
+1. **Native**（步骤⑥）— 关闭 FlagGems 的基线性能
+2. **Full FlagGems**（步骤⑨）— 启用全量 FlagGems 的性能
+3. **Optimized FlagGems**（步骤⑫）— 仅在 Full 不达标时，通过算子优化找到 ≥80% 的组合
+
+**算子列表必录**：只要 FlagGems 处于启用状态，必须记录算子列表到 ops_list.json，这是算子优化的基础。
+
+最终需要三个结果文件：
+1. **native_performance.json** — Native 性能
+2. **flagos_full.json** — Full FlagGems 性能
+3. **flagos_optimized.json** — Optimized FlagGems 性能（仅在不达标时产出）
+
+## 步骤 0：策略确定
+
+策略由流程阶段自动决定，不在此处单独询问：
+
+- **Quick 筛查阶段**：自动使用 `--strategy quick`，无需询问用户
+- **正式评测阶段**：询问用户选择 `fast`（推荐）或 `comprehensive`
+
+| 选项 | 说明 | 触发时机 |
+|------|------|----------|
+| `quick` | 只跑 4k_input_1k_output + max，快速验证 | quick 筛查阶段自动使用 |
+| **`fast`**（推荐） | 所有用例，饱和即停 | 正式评测默认推荐 |
+| `comprehensive` | 所有用例，所有并发全跑 | 用户要求"完整测试" |
+
+**Final Burst**：默认不跑。仅在正式评测阶段、用户显式要求时启用。
+
+一旦选定，该阶段内所有性能测试统一使用同一策略。
+
+## 步骤 1：同步配置
+
+从 `shared/context.yaml` 读取服务信息，写入 `/flagos-workspace/perf/config/perf_config.yaml`。
+
+同时将配置快照保存到 `config/` 目录：
+```bash
+docker exec $CONTAINER cp /flagos-workspace/perf/config/perf_config.yaml /flagos-workspace/config/perf_config.yaml
+```
+
+**per-test-case 超时配置**：在 perf_config.yaml 中为不同用例设置不同超时：
 
 ```yaml
 test_matrix:
-  - name: "1k_input_1k_output"
-    enabled: true
-  - name: "16k_input_1k_output"
-    enabled: false  # 如果 max_model_len < 16384
-```
-
-### 步骤 4：在容器内执行测试
-
-```bash
-docker exec $CONTAINER bash -c "cd /flagos-workspace/perf && python perf.py --config config/perf_config.yaml"
-```
-
-**其他运行选项：**
-
-```bash
-# 运行单个测试用例
-docker exec $CONTAINER bash -c "cd /flagos-workspace/perf && python perf.py --test-case 1k_input_1k_output"
-
-# 仅打印命令不执行（调试用）
-docker exec $CONTAINER bash -c "cd /flagos-workspace/perf && python perf.py --dry-run"
-```
-
-### 步骤 5：获取测试结果（宿主机直接访问）
-
-```bash
-# 无需 docker cp，宿主机直接查看
-ls /data/flagos-workspace/<model_name>/perf/output/
-cat /data/flagos-workspace/<model_name>/perf/output/benchmark_*.json
-```
-
----
-
-## 配置说明
-
-`config/perf_config.yaml` 包含完整配置：
-
-```yaml
-# 服务连接（必填，从 context.yaml 同步）
-server:
-  host: "127.0.0.1"
-  port: 8000
-
-model:
-  name: "/path/to/model"
-  tokenizer_path: "/path/to/model"
-
-# 测试矩阵
-test_matrix:
-  - name: "1k_input_1k_output"
+  - name: 1k_input_1k_output
     input_len: 1024
     output_len: 1024
-    enabled: true
+    timeout: 600        # 默认 600s 足够
+  - name: 32k_input_1k_output
+    input_len: 32768
+    output_len: 1024
+    timeout: 1800       # 32k 输入需要更长时间
+  - name: 1k_input_4k_output
+    input_len: 1024
+    output_len: 4096
+    timeout: 900        # 长输出需要更多时间
+```
 
-# 并发级别
-concurrency:
-  levels: [1, 2, 4, 8, 16, 32, 64, 128, 256]
-  final_num_prompts: 1000
+## 步骤 2：判断当前 FlagGems 状态
+
+从 `shared/context.yaml` 的 `flaggems_control.integration_type` 和 `inspection` 字段判断当前环境中 FlagGems 是否已启用。
+
+判断依据（按优先级）：
+1. `flaggems_control.enable_method` 是否为 `auto`（plugin 自动启用）
+2. 环境变量 `USE_FLAGGEMS=1` / `USE_FLAGOS=1`
+3. 代码中是否有 `flag_gems.enable()` 被调用
+4. 服务启动日志中是否有 FlagGems 相关输出
+
+```
+当前状态判定:
+  ├── FlagGems 已启用 → 走路径 A（先测 FlagOS）
+  └── FlagGems 未启用 → 走路径 B（先测 Native）
 ```
 
 ---
 
-## 输出指标
+## 步骤 3：运行 Native 基线测试（步骤⑥）
 
-- Request throughput (req/s)
-- Output token throughput (tok/s)
-- TTFT: Mean/Median/P99 (ms)
-- TPOT: Mean/Median/P99 (ms)
-- ITL: Mean/Median/P99 (ms)
+此时服务已以 native 模式启动（FlagGems 关闭）。
+
+```bash
+docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/benchmark_runner.py \
+  --config perf/config/perf_config.yaml \
+  --strategy fast \
+  --output-name native_performance \
+  --output-dir /flagos-workspace/results/ \
+  --mode native"
+```
+
+## 步骤 4：启用全量 FlagGems，切换到 FlagOS 模式（步骤⑦）
+
+通过 `toggle_flaggems.py` 启用 FlagGems，重启服务。
+
+## 步骤 5：记录算子列表（强制）
+
+**FlagGems 启用状态下，必须先记录算子列表。**
+
+```bash
+${CMD_PREFIX} python3 -c "
+import json, flag_gems
+flag_gems.enable()
+ops = list(flag_gems.all_registered_ops()) if hasattr(flag_gems, 'all_registered_ops') else list(flag_gems.all_ops())
+with open('/flagos-workspace/results/ops_list.json', 'w') as f:
+    json.dump(sorted(ops), f, indent=2)
+print(f'已记录 {len(ops)} 个算子到 ops_list.json')
+"
+```
+
+## 步骤 6：运行 Full FlagGems 性能测试（步骤⑨）
+
+```bash
+docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/benchmark_runner.py \
+  --config perf/config/perf_config.yaml \
+  --strategy fast \
+  --output-name flagos_full \
+  --output-dir /flagos-workspace/results/ \
+  --mode flagos_full"
+```
+
+## 步骤 7：性能对比（步骤⑩）
+
+```bash
+docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/performance_compare.py \
+  --native results/native_performance.json \
+  --flagos-full results/flagos_full.json \
+  --output results/performance_compare.csv \
+  --target-ratio 0.8 \
+  --format markdown"
+```
+
+- 返回码 `0`：所有用例 ≥ 80%，Optimized = Full，跳到步骤 9
+- 返回码 `1`：有不达标用例，触发步骤 8
+
+## 步骤 8：[自动] 触发算子优化（步骤⑪）
+
+前置条件：`ops_list.json` 已存在（步骤 5 中已记录）。
+
+调用 `flagos-operator-replacement` 分组二分搜索。优化过程中使用已记录的算子列表作为搜索空间。
+
+优化完成后重测（步骤⑫）：
+
+```bash
+docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/benchmark_runner.py \
+  --config perf/config/perf_config.yaml \
+  --strategy fast \
+  --output-name flagos_optimized \
+  --output-dir /flagos-workspace/results/ \
+  --mode flagos_optimized"
+```
+
+## 步骤 9：三版性能对比 + 最终报告（步骤⑬）
+
+```bash
+docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/performance_compare.py \
+  --native results/native_performance.json \
+  --flagos-optimized results/flagos_optimized.json \
+  --flagos-full results/flagos_full.json \
+  --output results/performance_compare_final.csv \
+  --target-ratio 0.8 \
+  --format markdown"
+```
+
+当 Optimized = Full（全量已达标）时，只传 `--flagos-full`，不传 `--flagos-optimized`。
+
+## 步骤 10：写入 context.yaml
+
+---
+
+## 阶段性反馈格式
+
+每次性能测试完成后，必须向用户输出以下格式的总结：
+
+```
+性能测试结果
+========================================
+模式: native / flagos_full / flagos_optimized
+测试用例: prefill1_decode512, 1k_input_1k_output, ...
+最佳并发: 64
+Output throughput: 1850 tok/s
+Total throughput: 5200 tok/s
+Native 基线: 6500 tok/s（首次 native 测试时不显示此行）
+性能比: 80.0% — 达标(≥80%) / 不达标(<80%)
+========================================
+```
+
+**反馈规则**：
+- Native 模式测试时不显示"性能比"
+- FlagOS 模式测试时必须与 Native 基线对比并给出达标/不达标判断
+- 不达标时自动提示"建议触发算子优化"
+
+---
+
+## benchmark_runner.py 参数
+
+| 参数 | 说明 |
+|------|------|
+| `--config` | 配置文件路径 |
+| `--strategy` | 测试策略：`quick`(烟雾测试) / `fast`(饱和即停,默认) / `comprehensive`(全跑不早停) |
+| `--final-burst` | 追加无限制并发大规模最终测试（默认不跑，显式 opt-in） |
+| `--skip-case` | 跳过指定用例（可多次使用），如 `--skip-case 4k_input_1k_output`。用于复用 quick 已跑的数据 |
+| `--quick` | (向后兼容别名) 等同于 `--strategy quick` |
+| `--concurrency-search` | (向后兼容别名) 等同于 `--strategy fast` |
+| `--output-name` | 输出文件名（不含扩展名） |
+| `--output-dir` | 输出目录 |
+| `--mode` | 测试模式标记 |
+| `--test-case` | 运行指定测试用例 |
+| `--dry-run` | 仅打印命令不执行 |
+
+**优先级**：`--strategy` > `--quick` > `--concurrency-search` > 默认 `fast`
+
+### 并发搜索停止条件（strategy=fast 时生效）
+
+1. **连续 2 级增长 < 3%**：吞吐趋于饱和
+2. **吞吐下降 > 5%**：已过拐点，继续加并发无意义
+3. **请求失败 > 0**：服务过载
+
+以上条件仅对 `early_stop: true` 的用例生效。`prefill1_decode512` 和 `1k_input_1k_output` 两个用例设置 `early_stop: false`，所有并发全跑，用于跨平台对比基准。quick 模式自动追加 `--final-burst`（max 测试）。
+
+搜索结果中标注**最佳并发数**（吞吐峰值对应的并发级别），不区分是否提前停止。
+
+### per-test-case 超时
+
+从配置文件 `test_matrix[].timeout` 字段读取，默认 600s。长序列用例（如 32k 输入）可设置 1800s。
+
+## performance_compare.py 参数
+
+| 参数 | 说明 |
+|------|------|
+| `--native` | 原生性能 JSON（必填） |
+| `--flagos-initial` | FlagOS 初始性能 |
+| `--flagos-optimized` | FlagOS 优化后性能 |
+| `--flagos-full` | FlagOS 全量算子性能 |
+| `--output` | CSV 输出路径 |
+| `--target-ratio` | 目标比率（默认 0.8） |
+| `--format` | 输出格式: `text`（默认） / `markdown` |
 
 ---
 
 ## 完成条件
 
-- 测试脚本和配置已复制到容器
-- `perf.py` 执行完成
-- 结果文件已生成在 `output/` 目录
-- 结果已复制回宿主机
+- 测试脚本已在容器中就绪
+- **算子列表已记录**（FlagGems 启用时 ops_list.json 必须存在）
+- native_performance.json 已生成
+- flagos_full.json 已生成
+- 对比结果已生成（performance_compare.csv）
+- 性能比率已判断（≥ 80% 或触发算子优化）
+- 如触发优化：flagos_optimized.json 已生成
+- 最终三版对比已生成（performance_compare_final.csv）
+- context.yaml 已更新
+- 配置快照已保存到 `config/perf_config.yaml`
+- 对应 trace 文件已写入：
+  - `traces/06_perf_native.json`（Native 性能测试）
+  - `traces/09_perf_full_flagos.json`（Full FlagGems 性能测试）
+  - `traces/10_performance_compare.json`（性能对比）
+  - `traces/12_perf_optimized.json`（仅不达标时）
+  - `traces/13_final_report.json`（最终报告）

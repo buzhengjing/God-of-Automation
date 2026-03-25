@@ -5,6 +5,7 @@
 
 用法:
   python eval_orchestrator.py --config config.yaml
+  python eval_orchestrator.py --config config.yaml --quick
   python eval_orchestrator.py --config config.yaml --benchmarks mmlu,aime24
   python eval_orchestrator.py --config config.yaml --skip-custom --skip-optional
   python eval_orchestrator.py --config config.yaml --dry-run
@@ -24,6 +25,90 @@ from utils import (
     ProgressLogger, load_config, load_benchmark_registry,
     build_detail, save_json, load_json, ensure_dir,
 )
+
+
+# Thinking model 自动检测关键词
+THINKING_MODEL_PATTERNS = [
+    'qwen3', 'qwq', 'deepseek-r1', 'deepseek-r2',
+]
+
+
+def is_thinking_model(model_name: str) -> bool:
+    """根据模型名称自动检测是否为 thinking model。"""
+    name_lower = model_name.lower()
+    return any(pattern in name_lower for pattern in THINKING_MODEL_PATTERNS)
+
+
+def detect_thinking_model(config: dict, logger: Optional[ProgressLogger] = None) -> bool:
+    """
+    检测模型是否为 thinking model，仅做检测不修改 config。
+    优先级: model.thinking 显式设置 > 自动检测模型名。
+    """
+    model_cfg = config.get('model', {})
+    model_name = model_cfg.get('name', '')
+    thinking_explicit = model_cfg.get('thinking', None)
+
+    if thinking_explicit is True:
+        result = True
+    elif thinking_explicit is False:
+        result = False
+    else:
+        result = is_thinking_model(model_name)
+
+    if logger:
+        if result:
+            logger.log(f"[Thinking Model] Detected thinking model: {model_name}")
+            logger.log(f"[Thinking Model] Per-benchmark thinking config will be applied")
+        else:
+            logger.log(f"[Model] Standard (non-thinking) model: {model_name}")
+
+    return result
+
+
+def get_benchmark_config(
+    bench: Dict,
+    config: dict,
+    model_is_thinking: bool,
+) -> Tuple[Dict, Optional[Dict]]:
+    """
+    根据 benchmark 的 thinking 字段和模型是否为 thinking model，
+    返回该 benchmark 应使用的 (generation_config, dataset_filters)。
+
+    逻辑:
+    - 模型是 thinking + benchmark.thinking=true → 使用 thinking_generation_config + dataset_filters
+    - 其它情况 → 使用标准 generation_config，无 dataset_filters
+
+    Args:
+        bench: benchmark 注册表条目（含 thinking 字段）
+        config: 主配置
+        model_is_thinking: 模型是否为 thinking model
+
+    Returns:
+        (generation_config, dataset_filters)
+    """
+    bench_wants_thinking = bench.get('thinking', False)
+    use_thinking = model_is_thinking and bench_wants_thinking
+
+    if use_thinking:
+        # 优先用 thinking_generation_config，fallback 到默认值
+        thinking_gen = config.get('thinking_generation_config')
+        if thinking_gen:
+            gen_config = dict(thinking_gen)
+        else:
+            gen_config = {
+                'max_tokens': 30000,
+                'temperature': 0.6,
+                'top_p': 0.95,
+                'top_k': 20,
+                'n': 1,
+            }
+        # 启用 dataset_filters
+        ds_filters = config.get('dataset_filters') or {'remove_until': '</think>'}
+        if 'remove_until' not in ds_filters:
+            ds_filters['remove_until'] = '</think>'
+        return gen_config, ds_filters
+    else:
+        return dict(config.get('generation_config', {})), None
 
 
 def resolve_benchmarks(
@@ -88,9 +173,20 @@ def run_single_benchmark(
     work_dir: str,
     limit: Optional[int],
     logger: ProgressLogger,
+    model_is_thinking: bool = False,
+    quick: bool = False,
 ) -> Dict:
     """
     运行单个 benchmark。
+
+    Args:
+        bench: benchmark 注册表条目
+        config: 主配置
+        work_dir: 输出目录
+        limit: 样本数限制
+        logger: 日志器
+        model_is_thinking: 模型是否为 thinking model
+        quick: 是否为 quick 模式（启用 prediction 校验）
 
     Returns:
         {"benchmark": str, "display_name": str, "runner": str, "detail": dict}
@@ -100,13 +196,22 @@ def run_single_benchmark(
     runner = bench.get('runner', 'evalscope')
     bench_args = bench.get('args', {})
 
+    # 按 benchmark 粒度选择 generation_config 和 dataset_filters
+    bench_gen_config, bench_ds_filters = get_benchmark_config(bench, config, model_is_thinking)
+    use_thinking = model_is_thinking and bench.get('thinking', False)
+
     logger.separator("-", 50)
-    logger.log(f">>> Running: {display_name} (runner={runner})")
+    logger.log(f">>> Running: {display_name} (runner={runner}, thinking={'ON' if use_thinking else 'OFF'})")
 
     start = time.time()
     try:
         if runner == 'evalscope':
-            detail = _run_evalscope(bench_name, bench_args, display_name, config, work_dir, limit, logger)
+            detail = _run_evalscope(bench_name, bench_args, display_name, config,
+                                    work_dir, limit, logger,
+                                    generation_config=bench_gen_config,
+                                    dataset_filters=bench_ds_filters,
+                                    model_is_thinking=model_is_thinking,
+                                    quick=quick)
         elif runner == 'vlmeval':
             detail = _run_vlmeval(bench_name, bench_args, display_name, config, work_dir, limit, logger)
         elif runner == 'custom':
@@ -145,9 +250,19 @@ def _run_evalscope(
     bench_name: str, bench_args: dict, display_name: str,
     config: dict, work_dir: str, limit: Optional[int],
     logger: ProgressLogger,
+    generation_config: Optional[Dict] = None,
+    dataset_filters: Optional[Dict] = None,
+    model_is_thinking: bool = False,
+    quick: bool = False,
 ) -> Dict:
     """通过 EvalScope 执行器运行 benchmark。"""
-    from evalscope_runner import run_evalscope_benchmark, parse_evalscope_result
+    from evalscope_runner import run_evalscope_benchmark, parse_evalscope_result, validate_predictions
+
+    # 使用传入的 per-benchmark 配置，fallback 到全局配置
+    gen_config = generation_config or config.get('generation_config', {})
+    ds_filters = dataset_filters  # None 表示不过滤
+
+    bench_work_dir = os.path.join(work_dir, 'evalscope', bench_name)
 
     result = run_evalscope_benchmark(
         model_name=config['model']['name'],
@@ -155,15 +270,44 @@ def _run_evalscope(
         api_key=config['model'].get('api_key', 'EMPTY'),
         benchmark_name=bench_name,
         benchmark_args=bench_args,
-        generation_config=config.get('generation_config', {}),
+        generation_config=gen_config,
         evalscope_config=config.get('evalscope', {}),
-        work_dir=os.path.join(work_dir, 'evalscope', bench_name),
+        work_dir=bench_work_dir,
         limit=limit,
-        dataset_filters=config.get('dataset_filters', None),
+        dataset_filters=ds_filters,
         logger=logger,
     )
 
-    return parse_evalscope_result(result, display_name)
+    detail = parse_evalscope_result(result, display_name)
+
+    # Quick 模式：跑完后校验 prediction 结果
+    if quick:
+        logger.log(f"[QUICK] Validating predictions for {display_name} ...")
+        validation = validate_predictions(
+            work_dir=bench_work_dir,
+            benchmark_name=bench_name,
+            model_is_thinking=model_is_thinking,
+            logger=logger,
+        )
+        # 将校验结果附加到 detail
+        if isinstance(detail, dict):
+            detail.setdefault('rawDetails', {})
+            if isinstance(detail['rawDetails'], dict):
+                detail['rawDetails']['validation'] = validation
+            # 校验失败时覆盖 status
+            if not validation.get('pass', True):
+                detail['status'] = 'F'
+                issues = validation.get('issues', {})
+                fail_reasons = []
+                if issues.get('empty_responses'):
+                    fail_reasons.append(f"{len(issues['empty_responses'])} empty responses")
+                if issues.get('context_overflow'):
+                    fail_reasons.append(f"{len(issues['context_overflow'])} context overflow")
+                if issues.get('missing_thinking'):
+                    fail_reasons.append(f"{len(issues['missing_thinking'])} missing thinking")
+                logger.log(f"[QUICK] Validation FAILED: {', '.join(fail_reasons)}")
+
+    return detail
 
 
 def _run_vlmeval(
@@ -255,6 +399,8 @@ def run_orchestrator(
     parallel: int = 1,
     limit: Optional[int] = None,
     dry_run: bool = False,
+    preflight: bool = False,
+    quick: bool = False,
     logger: Optional[ProgressLogger] = None,
 ) -> Dict:
     """
@@ -269,6 +415,8 @@ def run_orchestrator(
         parallel: 并行度
         limit: 样本数限制
         dry_run: 仅打印计划不执行
+        preflight: 正式评测前用 limit=2 快速验证所有 benchmark
+        quick: Quick 模式，只跑 registry 中标记了 quick=true 的 benchmark
         logger: 日志器
 
     Returns:
@@ -289,21 +437,63 @@ def run_orchestrator(
     logger.log(f"Model: {model_name}")
     logger.log(f"Type: {model_type}")
 
+    # 检测模型是否为 thinking model（仅检测，不修改全局 config）
+    model_is_thinking = detect_thinking_model(config, logger)
+
     # 解析 benchmark 列表
     benchmarks = resolve_benchmarks(
         model_type, registry, skip_custom, skip_optional, only_benchmarks
     )
 
+    # Quick 模式：只跑标记了 quick=true 的 benchmark
+    if quick:
+        benchmarks = [b for b in benchmarks if b.get('quick', False)]
+        if not benchmarks:
+            logger.log("[ERROR] Quick mode: no benchmarks marked with quick=true in registry")
+            return {"error": "No quick benchmarks found"}
+        logger.log(f"[QUICK MODE] Running {len(benchmarks)} quick benchmark(s)")
+
     logger.log(f"Benchmarks to run: {len(benchmarks)}")
     for b in benchmarks:
-        logger.log(f"  - {b.get('display_name', b['name'])} (runner={b.get('runner', 'evalscope')})")
+        thinking_tag = " [thinking]" if (model_is_thinking and b.get('thinking', False)) else ""
+        logger.log(f"  - {b.get('display_name', b['name'])} (runner={b.get('runner', 'evalscope')}){thinking_tag}")
 
     if dry_run:
         logger.section("DRY RUN - No execution")
         return {"dry_run": True, "benchmarks": [b['name'] for b in benchmarks]}
 
-    # 执行
+    # Preflight 预检
     ensure_dir(work_dir)
+
+    if preflight:
+        logger.section("Preflight Check (limit=2)")
+        preflight_dir = os.path.join(work_dir, 'preflight')
+        ensure_dir(preflight_dir)
+        preflight_ok = True
+        for bench in benchmarks:
+            name = bench.get('display_name', bench['name'])
+            logger.log(f"  Preflight: {name} ...")
+            r = run_single_benchmark(bench, config, preflight_dir, 2, logger)
+            detail = r['detail']
+            if isinstance(detail, list):
+                failed = any(d.get('status') == 'F' for d in detail)
+                err_msg = 'sub-benchmark failed'
+            else:
+                failed = detail.get('status') == 'F'
+                err_msg = detail.get('error', 'unknown error')
+            if failed:
+                preflight_ok = False
+                logger.log(f"  [FAIL] {name}: {err_msg}")
+            else:
+                logger.log(f"  [OK] {name}")
+
+        if not preflight_ok:
+            logger.log("[ABORT] Preflight failed. Fix errors above before running full evaluation.")
+            return {"preflight": False, "error": "Preflight check failed"}
+        else:
+            logger.log("[PASS] All benchmarks passed preflight. Starting full evaluation...")
+
+    # 执行
     all_details = []
 
     if parallel > 1 and len(benchmarks) > 1:
@@ -312,7 +502,8 @@ def run_orchestrator(
             futures = {}
             for bench in benchmarks:
                 future = executor.submit(
-                    run_single_benchmark, bench, config, work_dir, limit, logger
+                    run_single_benchmark, bench, config, work_dir, limit, logger,
+                    model_is_thinking, quick,
                 )
                 futures[future] = bench['name']
 
@@ -330,7 +521,7 @@ def run_orchestrator(
                     all_details.append(build_detail(bench_name, 0.0, {"error": str(e)}, "F"))
     else:
         for bench in benchmarks:
-            result = run_single_benchmark(bench, config, work_dir, limit, logger)
+            result = run_single_benchmark(bench, config, work_dir, limit, logger, model_is_thinking, quick)
             detail = result['detail']
             if isinstance(detail, list):
                 all_details.extend(detail)
@@ -350,6 +541,7 @@ def run_orchestrator(
         report_json=os.path.basename(output_cfg.get('report_json', 'eval_report.json')),
         report_md=os.path.basename(output_cfg.get('report_md', 'eval_report.md')),
         total_duration_seconds=total_elapsed,
+        registry=registry,
     )
 
     logger.section("Evaluation Complete")
@@ -381,6 +573,9 @@ Examples:
   # 调试模式（小样本）
   python eval_orchestrator.py --config config.yaml --limit 5
 
+  # 预检后再全量评测
+  python eval_orchestrator.py --config config.yaml --preflight
+
   # 仅查看执行计划
   python eval_orchestrator.py --config config.yaml --dry-run
 
@@ -404,6 +599,10 @@ Examples:
                         help='并行执行的 benchmark 数量 (default: 1)')
     parser.add_argument('--limit', type=int, default=None,
                         help='限制每个 benchmark 的样本数（调试用）')
+    parser.add_argument('--quick', action='store_true',
+                        help='Quick 模式：只跑标记了 quick=true 的 benchmark（迁移流程用）')
+    parser.add_argument('--preflight', action='store_true',
+                        help='正式评测前先用 limit=2 快速验证所有 benchmark')
     parser.add_argument('--dry-run', action='store_true',
                         help='仅打印执行计划，不实际运行')
     parser.add_argument('--log', type=str, default=None,
@@ -450,6 +649,8 @@ Examples:
         parallel=args.parallel,
         limit=args.limit,
         dry_run=args.dry_run,
+        preflight=args.preflight,
+        quick=args.quick,
         logger=logger,
     )
 
