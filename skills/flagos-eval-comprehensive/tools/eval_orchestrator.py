@@ -174,6 +174,7 @@ def run_single_benchmark(
     limit: Optional[int],
     logger: ProgressLogger,
     model_is_thinking: bool = False,
+    quick: bool = False,
 ) -> Dict:
     """
     运行单个 benchmark。
@@ -185,6 +186,7 @@ def run_single_benchmark(
         limit: 样本数限制
         logger: 日志器
         model_is_thinking: 模型是否为 thinking model
+        quick: 是否为 quick 模式（启用 prediction 校验）
 
     Returns:
         {"benchmark": str, "display_name": str, "runner": str, "detail": dict}
@@ -207,7 +209,9 @@ def run_single_benchmark(
             detail = _run_evalscope(bench_name, bench_args, display_name, config,
                                     work_dir, limit, logger,
                                     generation_config=bench_gen_config,
-                                    dataset_filters=bench_ds_filters)
+                                    dataset_filters=bench_ds_filters,
+                                    model_is_thinking=model_is_thinking,
+                                    quick=quick)
         elif runner == 'vlmeval':
             detail = _run_vlmeval(bench_name, bench_args, display_name, config, work_dir, limit, logger)
         elif runner == 'custom':
@@ -248,13 +252,17 @@ def _run_evalscope(
     logger: ProgressLogger,
     generation_config: Optional[Dict] = None,
     dataset_filters: Optional[Dict] = None,
+    model_is_thinking: bool = False,
+    quick: bool = False,
 ) -> Dict:
     """通过 EvalScope 执行器运行 benchmark。"""
-    from evalscope_runner import run_evalscope_benchmark, parse_evalscope_result
+    from evalscope_runner import run_evalscope_benchmark, parse_evalscope_result, validate_predictions
 
     # 使用传入的 per-benchmark 配置，fallback 到全局配置
     gen_config = generation_config or config.get('generation_config', {})
     ds_filters = dataset_filters  # None 表示不过滤
+
+    bench_work_dir = os.path.join(work_dir, 'evalscope', bench_name)
 
     result = run_evalscope_benchmark(
         model_name=config['model']['name'],
@@ -264,13 +272,42 @@ def _run_evalscope(
         benchmark_args=bench_args,
         generation_config=gen_config,
         evalscope_config=config.get('evalscope', {}),
-        work_dir=os.path.join(work_dir, 'evalscope', bench_name),
+        work_dir=bench_work_dir,
         limit=limit,
         dataset_filters=ds_filters,
         logger=logger,
     )
 
-    return parse_evalscope_result(result, display_name)
+    detail = parse_evalscope_result(result, display_name)
+
+    # Quick 模式：跑完后校验 prediction 结果
+    if quick:
+        logger.log(f"[QUICK] Validating predictions for {display_name} ...")
+        validation = validate_predictions(
+            work_dir=bench_work_dir,
+            benchmark_name=bench_name,
+            model_is_thinking=model_is_thinking,
+            logger=logger,
+        )
+        # 将校验结果附加到 detail
+        if isinstance(detail, dict):
+            detail.setdefault('rawDetails', {})
+            if isinstance(detail['rawDetails'], dict):
+                detail['rawDetails']['validation'] = validation
+            # 校验失败时覆盖 status
+            if not validation.get('pass', True):
+                detail['status'] = 'F'
+                issues = validation.get('issues', {})
+                fail_reasons = []
+                if issues.get('empty_responses'):
+                    fail_reasons.append(f"{len(issues['empty_responses'])} empty responses")
+                if issues.get('context_overflow'):
+                    fail_reasons.append(f"{len(issues['context_overflow'])} context overflow")
+                if issues.get('missing_thinking'):
+                    fail_reasons.append(f"{len(issues['missing_thinking'])} missing thinking")
+                logger.log(f"[QUICK] Validation FAILED: {', '.join(fail_reasons)}")
+
+    return detail
 
 
 def _run_vlmeval(
@@ -466,7 +503,7 @@ def run_orchestrator(
             for bench in benchmarks:
                 future = executor.submit(
                     run_single_benchmark, bench, config, work_dir, limit, logger,
-                    model_is_thinking,
+                    model_is_thinking, quick,
                 )
                 futures[future] = bench['name']
 
@@ -484,7 +521,7 @@ def run_orchestrator(
                     all_details.append(build_detail(bench_name, 0.0, {"error": str(e)}, "F"))
     else:
         for bench in benchmarks:
-            result = run_single_benchmark(bench, config, work_dir, limit, logger, model_is_thinking)
+            result = run_single_benchmark(bench, config, work_dir, limit, logger, model_is_thinking, quick)
             detail = result['detail']
             if isinstance(detail, list):
                 all_details.extend(detail)

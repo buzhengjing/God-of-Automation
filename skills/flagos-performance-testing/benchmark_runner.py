@@ -238,7 +238,7 @@ def get_test_case_timeout(test_case: Dict[str, Any]) -> int:
 QUICK_MAX_CONCURRENCY = 256
 
 # Quick 模式硬编码用例名
-QUICK_TEST_CASE_NAME = "prefill1_decode512"
+QUICK_TEST_CASE_NAME = "4k_input_1k_output"
 
 
 def run_test_case(config: Dict[str, Any], test_case: Dict[str, Any],
@@ -596,11 +596,15 @@ def main():
             print(f"ERROR: 测试用例 '{args.test_case}' 不存在")
             sys.exit(1)
     elif strategy == "quick":
-        # quick 模式：只跑 prefill1_decode512
+        # quick 模式：只跑 4k_input_1k_output + 自动追加 max
         test_matrix = [tc for tc in test_matrix if tc["name"] == QUICK_TEST_CASE_NAME]
         if not test_matrix:
             print(f"WARN: 未找到 '{QUICK_TEST_CASE_NAME}' 用例，使用第一个已启用的用例")
             test_matrix = [tc for tc in config["test_matrix"] if tc.get("enabled", True)][:1]
+        # quick 模式自动启用 final-burst（max 测试）
+        if not args.final_burst:
+            args.final_burst = True
+            print("[QUICK MODE] 自动启用 --final-burst (max 测试)")
     elif strategy == "fixed":
         # fixed 模式：只跑有 fixed_concurrency 字段的用例
         test_matrix = [tc for tc in test_matrix if tc.get("enabled", True) and "fixed_concurrency" in tc]
@@ -626,7 +630,7 @@ def main():
     print(f"将运行 {len(test_matrix)} 个测试用例")
 
     strategy_labels = {
-        "quick": "[策略] quick — 烟雾测试（num_prompts=concurrency, 只跑 prefill1_decode512）",
+        "quick": "[策略] quick — 烟雾测试（num_prompts=concurrency, 只跑 4k_input_1k_output + max）",
         "fast": "[策略] fast — 智能搜索（num_prompts=concurrency, 饱和即停）",
         "comprehensive": "[策略] comprehensive — 全量测试（num_prompts=concurrency, 所有并发全跑）",
         "fixed": "[策略] fixed — 固定并发（只跑配置的 fixed_concurrency 级别）",

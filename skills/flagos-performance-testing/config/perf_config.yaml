@@ -22,7 +22,7 @@ test_matrix:
     input_len: 1
     output_len: 512
     enabled: true
-    early_stop: false     # 不早停，所有并发全跑；--quick 模式下只跑此用例
+    early_stop: false     # 不早停，所有并发全跑；跨平台对比基准用例
 
   - name: "1k_input_1k_output"
     input_len: 1024
@@ -35,6 +35,7 @@ test_matrix:
     input_len: 4096
     output_len: 1024
     enabled: true
+    early_stop: false     # 不早停，所有并发全跑；--quick 模式下只跑此用例 + max
 
   - name: "16k_input_1k_output"
     input_len: 16384

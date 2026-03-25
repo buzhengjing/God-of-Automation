@@ -70,7 +70,7 @@
 
 **Quick 模式**（筛查阶段）：
 - 全 ①-⑬ 步骤完整执行，流程和算子替换逻辑**与标准模式完全一致**
-- 区别仅在于：性能测试用 `--strategy quick`（只跑 prefill1_decode512），精度评测用 `--quick`（AIME25 only）
+- 区别仅在于：性能测试用 `--strategy quick`（只跑 4k_input_1k_output + max），精度评测用 `--quick`（AIME25 并发校验：空返回/上下文溢出/thinking 模式检测）
 - 目标：验证流程可走通 + 快速筛查算子问题（启动崩溃、eval 报错、精度不达标、性能不达标）
 - 算子搜索内部始终用 quick benchmark，与外层模式无关
 - **精度评测规则**：步骤⑤（Native 精度）可跳过；步骤⑧（FlagGems 精度）**绝对不能跳过**，因为开启 FlagGems 后必须验证算子兼容性和精度

@@ -305,6 +305,168 @@ def parse_evalscope_result(result: Dict, display_name: str) -> Optional[Dict]:
         )
 
 
+def validate_predictions(
+    work_dir: str,
+    benchmark_name: str,
+    model_is_thinking: bool = False,
+    logger: Optional[ProgressLogger] = None,
+) -> Dict:
+    """
+    扫描 EvalScope 输出的 prediction jsonl 文件，校验每条结果。
+
+    校验项：
+    1. 空返回：model_output 为空或无 choices
+    2. Thinking 缺失：thinking 模型的输出缺少 reasoning 块
+    3. 上下文溢出：输出含 context length / token limit 错误信息
+
+    Args:
+        work_dir: EvalScope 输出目录（含 predictions/ 子目录）
+        benchmark_name: benchmark 名称
+        model_is_thinking: 模型是否为 thinking model
+        logger: 日志器
+
+    Returns:
+        校验结果 dict：total, valid, issues, pass
+    """
+    import glob as glob_mod
+
+    issues = {
+        "empty_responses": [],
+        "missing_thinking": [],
+        "context_overflow": [],
+        "short_responses": [],
+    }
+    total = 0
+    valid = 0
+
+    # 查找 predictions 目录下的所有 jsonl 文件
+    pred_pattern = os.path.join(work_dir, "**", "predictions", "**", "*.jsonl")
+    pred_files = glob_mod.glob(pred_pattern, recursive=True)
+
+    if not pred_files:
+        if logger:
+            logger.log(f"[VALIDATE] No prediction files found in {work_dir}")
+        return {"total": 0, "valid": 0, "issues": issues, "pass": True}
+
+    CONTEXT_OVERFLOW_PATTERNS = [
+        "context length", "maximum.*token", "exceed.*length",
+        "token limit", "too long", "max_model_len",
+    ]
+
+    for pred_file in pred_files:
+        try:
+            with open(pred_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    total += 1
+                    idx = record.get('index', total)
+                    model_output = record.get('model_output', {})
+
+                    # 检查 error 字段
+                    if isinstance(model_output, dict) and model_output.get('error'):
+                        error_msg = str(model_output['error']).lower()
+                        # 检查是否为上下文溢出
+                        if any(p in error_msg for p in CONTEXT_OVERFLOW_PATTERNS):
+                            issues["context_overflow"].append({"index": idx, "error": model_output['error']})
+                        else:
+                            issues["empty_responses"].append({"index": idx, "error": model_output['error']})
+                        continue
+
+                    # 提取 choices
+                    choices = []
+                    if isinstance(model_output, dict):
+                        choices = model_output.get('choices', [])
+
+                    if not choices:
+                        issues["empty_responses"].append({"index": idx, "reason": "no choices in model_output"})
+                        continue
+
+                    # 提取 message content
+                    message = choices[0].get('message', {}) if isinstance(choices[0], dict) else {}
+                    content = message.get('content', '')
+
+                    # content 可能是字符串或列表（thinking 模型）
+                    has_text = False
+                    has_reasoning = False
+                    text_content = ""
+
+                    if isinstance(content, str):
+                        text_content = content
+                        has_text = bool(content.strip())
+                        # 字符串形式的 thinking 输出可能包含 <think> 标签
+                        has_reasoning = '<think>' in content
+                    elif isinstance(content, list):
+                        for part in content:
+                            if isinstance(part, dict):
+                                if part.get('type') == 'text':
+                                    text_val = part.get('text', '')
+                                    if text_val and text_val.strip():
+                                        has_text = True
+                                        text_content += text_val
+                                elif part.get('type') == 'reasoning':
+                                    reasoning_val = part.get('reasoning', '')
+                                    if reasoning_val and reasoning_val.strip():
+                                        has_reasoning = True
+                                        text_content += reasoning_val
+
+                    # 校验 1：空返回
+                    if not has_text and not has_reasoning:
+                        issues["empty_responses"].append({"index": idx, "reason": "empty content"})
+                        continue
+
+                    # 校验 2：过短返回（仅警告）
+                    if len(text_content) < 10:
+                        issues["short_responses"].append({"index": idx, "length": len(text_content)})
+
+                    # 校验 3：Thinking 模式缺失
+                    if model_is_thinking and not has_reasoning:
+                        issues["missing_thinking"].append({"index": idx, "reason": "no reasoning block"})
+
+                    # 校验 4：上下文溢出（检查 stop_reason）
+                    stop_reason = choices[0].get('stop_reason', '') or choices[0].get('finish_reason', '') or ''
+                    if stop_reason == 'length':
+                        # 输出被截断，可能因为 max_tokens 不够
+                        issues["context_overflow"].append({"index": idx, "reason": f"stop_reason=length"})
+
+                    valid += 1
+
+        except Exception as e:
+            if logger:
+                logger.log(f"[VALIDATE] Error reading {pred_file}: {e}")
+
+    # 判定是否通过
+    passed = (
+        len(issues["empty_responses"]) == 0
+        and len(issues["context_overflow"]) == 0
+    )
+
+    # 日志输出
+    if logger:
+        logger.log(f"[VALIDATE] {benchmark_name}: total={total}, valid={valid}, pass={'YES' if passed else 'NO'}")
+        if issues["empty_responses"]:
+            logger.log(f"  [FAIL] {len(issues['empty_responses'])} empty responses: {[i['index'] for i in issues['empty_responses']]}")
+        if issues["missing_thinking"]:
+            logger.log(f"  [FAIL] {len(issues['missing_thinking'])} missing thinking: {[i['index'] for i in issues['missing_thinking']]}")
+        if issues["context_overflow"]:
+            logger.log(f"  [FAIL] {len(issues['context_overflow'])} context overflow: {[i['index'] for i in issues['context_overflow']]}")
+        if issues["short_responses"]:
+            logger.log(f"  [WARN] {len(issues['short_responses'])} short responses (<10 chars)")
+
+    return {
+        "total": total,
+        "valid": valid,
+        "issues": issues,
+        "pass": passed,
+    }
+
+
 def _extract_score(result: dict, depth: int = 0) -> Optional[float]:
     """递归从结果中提取分数。"""
     if depth > 5:

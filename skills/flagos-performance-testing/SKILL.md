@@ -27,12 +27,12 @@ provides:
 
 | strategy | 含义 | 用例选择 | 并发行为 | 样本量 |
 |----------|------|----------|----------|--------|
-| `quick` | 烟雾测试 | 只跑 `prefill1_decode512` | 所有 levels 到 256，不早停 | `num_prompts=concurrency` |
+| `quick` | 烟雾测试 | 只跑 `4k_input_1k_output` + max | 所有 levels 到 256，不早停 + final-burst | `num_prompts=concurrency` |
 | `fast` | 饱和即停（默认） | 所有 enabled 用例 | 按 `early_stop` 配置决定 | `num_prompts=concurrency` |
 | `comprehensive` | 全跑 | 所有 enabled 用例 | 所有并发全跑，强制不早停 | `num_prompts=concurrency` |
 | `fixed` | 固定并发 | 只跑有 `fixed_concurrency` 的用例 | 只跑配置的固定并发级别 | `num_prompts=concurrency` |
 
-**所有档统一 `num_prompts=concurrency`**，因此 quick 产出的 `prefill1_decode512` 数据可直接复用，全量测试无需重跑该用例。
+**所有档统一 `num_prompts=concurrency`**，因此 quick 产出的 `4k_input_1k_output` 数据可直接复用，全量测试无需重跑该用例。
 
 **策略选择**：在流程开始前询问用户选择 strategy，一旦选定，整个流程的所有性能测试统一使用同一策略。
 
@@ -150,7 +150,7 @@ except Exception as e:
 
 | 选项 | 说明 | 触发时机 |
 |------|------|----------|
-| `quick` | 只跑 prefill1_decode512，快速验证 | quick 筛查阶段自动使用 |
+| `quick` | 只跑 4k_input_1k_output + max，快速验证 | quick 筛查阶段自动使用 |
 | **`fast`**（推荐） | 所有用例，饱和即停 | 正式评测默认推荐 |
 | `comprehensive` | 所有用例，所有并发全跑 | 用户要求"完整测试" |
 
@@ -326,7 +326,7 @@ Native 基线: 6500 tok/s（首次 native 测试时不显示此行）
 | `--config` | 配置文件路径 |
 | `--strategy` | 测试策略：`quick`(烟雾测试) / `fast`(饱和即停,默认) / `comprehensive`(全跑不早停) |
 | `--final-burst` | 追加无限制并发大规模最终测试（默认不跑，显式 opt-in） |
-| `--skip-case` | 跳过指定用例（可多次使用），如 `--skip-case prefill1_decode512`。用于复用 quick 已跑的数据 |
+| `--skip-case` | 跳过指定用例（可多次使用），如 `--skip-case 4k_input_1k_output`。用于复用 quick 已跑的数据 |
 | `--quick` | (向后兼容别名) 等同于 `--strategy quick` |
 | `--concurrency-search` | (向后兼容别名) 等同于 `--strategy fast` |
 | `--output-name` | 输出文件名（不含扩展名） |
@@ -343,7 +343,7 @@ Native 基线: 6500 tok/s（首次 native 测试时不显示此行）
 2. **吞吐下降 > 5%**：已过拐点，继续加并发无意义
 3. **请求失败 > 0**：服务过载
 
-以上条件仅对 `early_stop: true` 的用例生效。`prefill1_decode512` 和 `1k_input_1k_output` 两个用例设置 `early_stop: false`，所有并发全跑，用于跨平台对比基准。
+以上条件仅对 `early_stop: true` 的用例生效。`prefill1_decode512` 和 `1k_input_1k_output` 两个用例设置 `early_stop: false`，所有并发全跑，用于跨平台对比基准。quick 模式自动追加 `--final-burst`（max 测试）。
 
 搜索结果中标注**最佳并发数**（吞吐峰值对应的并发级别），不区分是否提前停止。
 

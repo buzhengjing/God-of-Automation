@@ -43,10 +43,16 @@ provides:
 
 | 模式 | 命令参数 | 运行的 Benchmark | 用途 |
 |------|---------|-----------------|------|
-| **Quick** | `--quick` | 仅 `quick: true` 的 benchmark（当前为 AIME25） | 迁移筛查阶段，快速验证精度 |
+| **Quick** | `--quick` | 仅 `quick: true` 的 benchmark（当前为 AIME25） | 迁移筛查阶段，并发校验 + 快速验证精度 |
 | **全量** | 无额外参数 | 该模型类型的全部必测 + 可选 benchmark | 正式评测阶段 |
 
 **Quick 模式与全量模式的区别仅在于数据集选择不同，其他逻辑（配置、执行、报告）完全一致。**
+
+**Quick 模式并发校验**：EvalScope 以 `eval_batch_size`（默认 64）并发发送请求后，自动扫描每条 prediction 结果进行校验：
+- **空返回检测**：model_output 为空、无 choices、content 为空白
+- **Thinking 模式检测**：thinking 模型的输出必须包含 reasoning 块（`<think>` 标签）
+- **上下文溢出检测**：stop_reason=length 或错误信息含 context length 关键词
+- 校验失败时，eval_report.json 中对应 benchmark 的 `status` 标记为 `"F"`，`rawDetails.validation` 包含详细问题列表
 
 Quick 模式运行命令：
 ```bash
