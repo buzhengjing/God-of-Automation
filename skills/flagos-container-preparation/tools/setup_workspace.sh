@@ -132,15 +132,6 @@ if [ -f "${PROJECT_ROOT}/skills/flagos-service-startup/tools/calc_tp_size.py" ];
     echo "  ✓ calc_tp_size.py"
 fi
 
-# FlagTree 安装脚本
-if [ -f "${PROJECT_ROOT}/skills/flagos-container-preparation/tools/install_flagtree.sh" ]; then
-    docker cp "${PROJECT_ROOT}/skills/flagos-container-preparation/tools/install_flagtree.sh" \
-        "${CONTAINER}:/flagos-workspace/scripts/install_flagtree.sh"
-    docker exec "${CONTAINER}" chmod +x /flagos-workspace/scripts/install_flagtree.sh
-    SCRIPTS_COPIED=$((SCRIPTS_COPIED + 1))
-    echo "  ✓ install_flagtree.sh"
-fi
-
 # 评测配置模板（不存在则跳过）
 if [ -f "${PROJECT_ROOT}/skills/flagos-eval-correctness/tools/config.yaml" ]; then
     docker cp "${PROJECT_ROOT}/skills/flagos-eval-correctness/tools/config.yaml" \

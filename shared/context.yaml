@@ -127,24 +127,11 @@ plugin_control:
   dispatch_mode: ""             # flagos | vendor | reference
 
 # ============================================================================
-# FlagTree 信息 (由 pre-service-inspection 写入)
-# ============================================================================
-flagtree:
-  installed: false          # 是否已安装
-  version: ""               # FlagTree 版本
-  triton_version: ""        # 对应 Triton 版本
-  install_method: ""        # pip | source | pre_installed
-  backend: ""               # nvidia | ascend | ...
-
-# ============================================================================
 # 环境状态 (由 service-startup 写入)
 # ============================================================================
 environment:
   has_plugin: false          # 是否有 vllm-plugin-FL
-  has_flagtree: false        # 是否有 FlagTree
-  flagtree_installed_by_us: false  # 是否由本流程安装的 FlagTree
   initial_env_verified: false      # 初始环境是否验证通过
-  flagtree_env_verified: false     # FlagTree 环境是否验证通过
 
 # ============================================================================
 # FlagGems 启停方法 (由 pre-service-inspection 探测写入)

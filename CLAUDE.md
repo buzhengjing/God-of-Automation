@@ -37,31 +37,25 @@
 
 **强制按以下顺序执行，不可跳步或调换：**
 
-**核心变更**：拿到环境后先验证初始服务可用，检测 plugin 和 FlagTree，再决定是否安装 FlagTree，最后进行三版性能测试。
+**核心变更**：拿到环境后先验证初始服务可用，检测 plugin，再进行三版性能测试。
 
 **三版测试**：Native → Optimized FlagGems（≥80%）→ Full FlagGems
 
 ```
 ① container-preparation       → 容器准备（含本地权重检查 + 多入口自动识别）
-② pre-service-inspection      → 环境检测（新增 FlagTree/plugin 探测）
+② pre-service-inspection      → 环境检测（plugin 探测）
 ③ service-startup (default)   → 以当前环境原样启动服务，验证初始环境可用
-④ [询问用户] 是否安装 FlagTree?
-   ├── 否 → 在当前环境进行三版测试
-   └── 是 → ④a 安装 FlagTree → ④b 重启服务验证
-             ├── 成功 → 在 plugin+FlagTree 环境进行三版测试
-             └── 失败 → ④c 恢复环境（重新 run 容器 或 卸载 FlagTree）
-                        → 在初始环境进行三版测试
-⑤ eval-comprehensive (native)    → 精度评测（询问用户，quick 模式可跳过）
-⑥ performance-testing (native)   → Native 性能基线（关闭 FlagGems）
-⑦ service-startup (flagos)       → 启用全量 FlagGems
-⑧ eval-comprehensive (full-flagos)→ 精度评测（**必须执行，不可跳过**）+ 算子报错自动处理
-⑨ performance-testing (full)    → Full FlagGems 性能
-⑩ [自动] 性能对比               → full_flagos/native ≥ 80%?
-   ├── 是 → Optimized = Full，跳到 ⑬
-   └── 否 → ⑪ operator-replacement（分组二分搜索）
+④ eval-comprehensive (native)    → 精度评测（询问用户，quick 模式可跳过）
+⑤ performance-testing (native)   → Native 性能基线（关闭 FlagGems）
+⑥ service-startup (flagos)       → 启用全量 FlagGems
+⑦ eval-comprehensive (full-flagos)→ 精度评测（**必须执行，不可跳过**）+ 算子报错自动处理
+⑧ performance-testing (full)    → Full FlagGems 性能
+⑨ [自动] 性能对比               → full_flagos/native ≥ 80%?
+   ├── 是 → Optimized = Full，跳到 ⑫
+   └── 否 → ⑩ operator-replacement（分组二分搜索）
              → 找到 ≥80% 的算子组合
-⑫ performance-testing (optimized) → Optimized FlagGems 性能（搜索过程中已产出）
-⑬ 三版性能对比 + 生成最终报告
+⑪ performance-testing (optimized) → Optimized FlagGems 性能（搜索过程中已产出）
+⑫ 三版性能对比 + 生成最终报告
 ```
 
 ### Quick 模式与正式评测（二阶段）
@@ -69,27 +63,23 @@
 流程支持两种执行模式，用户在流程开始前选择：
 
 **Quick 模式**（筛查阶段）：
-- 全 ①-⑬ 步骤完整执行，流程和算子替换逻辑**与标准模式完全一致**
+- 全 ①-⑫ 步骤完整执行，流程和算子替换逻辑**与标准模式完全一致**
 - 区别仅在于：性能测试用 `--strategy quick`（只跑 4k_input_1k_output + max），精度评测用 GPQA Diamond 快速评测（fast_gpqa.py，自动适配 thinking/non-thinking）
 - 目标：验证流程可走通 + 快速筛查算子问题（启动崩溃、eval 报错、精度不达标、性能不达标）
 - 算子搜索内部始终用 quick benchmark，与外层模式无关
-- **精度评测规则**：步骤⑤（Native 精度）可跳过；步骤⑧（FlagGems 精度）**绝对不能跳过**，因为开启 FlagGems 后必须验证算子兼容性和精度
+- **精度评测规则**：步骤④（Native 精度）可跳过；步骤⑦（FlagGems 精度）**绝对不能跳过**，因为开启 FlagGems 后必须验证算子兼容性和精度
 
 **正式评测**（复测阶段）：
-- Quick 筛查完毕、算子问题已修复后，从步骤⑤或⑥开始复测
+- Quick 筛查完毕、算子问题已修复后，从步骤④或⑤开始复测
 - 性能测试切换为 `fast`（饱和即停）或 `comprehensive`（全跑）
 - 精度评测切换为完整模式（GPQA Diamond 全量 或远端 FlagRelease）
-- 跳过 ①②③④，直接复用已修复的环境和算子配置
+- 跳过 ①②③，直接复用已修复的环境和算子配置
 - 产出正式的三版结果文件用于最终报告
 
 **三版结果文件**（均位于 `results/` 目录下）：
 - `results/native_performance.json` — Native（无 FlagGems）
 - `results/flagos_full.json` — Full FlagGems（全量算子）
 - `results/flagos_optimized.json` — Optimized FlagGems（≥80% 组合）
-
-**FlagTree 安装失败恢复策略**：
-1. **优先方案**：重新 `docker run` 一个新容器（最可靠，一步还原全部环境），需用户确认
-2. **备选方案**（特殊环境如阿里云不能重启时）：`install_flagtree.sh uninstall` 卸载 FlagTree 恢复原始 triton
 
 ---
 
@@ -100,9 +90,6 @@
 | 决策项 | 默认值 | 说明 |
 |--------|--------|------|
 | FlagGems 仓库地址 | `https://github.com/FlagOpen/FlagGems.git` | 无需用户提供 |
-| FlagTree 仓库地址 | `https://github.com/flagos-ai/FlagTree` | 无需用户提供 |
-| FlagTree 默认版本 | 按后端自动选择（NVIDIA 默认 `0.5.0rc1`） | `install_flagtree.sh list-vendors` 查看全部 |
-| FlagTree 安装源 | `https://resource.flagos.net/repository/flagos-pypi-hosted/simple` | pip index-url |
 | 性能目标 | 80% of native | 不询问"目标是多少" |
 | pip install 模式 | `pip install .`（非 editable） | 避免 `-e .` 在容器中的问题 |
 | 服务端口 | 从 README/容器配置中提取 | 不询问端口号 |
@@ -110,14 +97,12 @@
 
 ---
 
-## 仅在以下情况询问用户（全流程预期 ≤5 次交互）
+## 仅在以下情况询问用户（全流程预期 ≤3 次交互）
 
 1. **docker run 命令最终确认** — 不可逆操作，需用户确认参数
 2. **容器网络不通且需要代理配置** — 自动检测网络后才问
 3. **搜索 3 轮仍未达标** — 需要用户决定是否继续
-4. **精度评测是否执行** — 仅步骤⑤（Native 精度）询问用户，quick 模式下可跳过；步骤⑧（FlagGems 精度）**强制执行不询问**
-5. **是否安装 FlagTree** — 步骤④，初始环境验证通过后询问
-6. **FlagTree 安装失败时，是否重新 run 容器** — 恢复环境需用户确认
+4. **精度评测是否执行** — 仅步骤④（Native 精度）询问用户，quick 模式下可跳过；步骤⑦（FlagGems 精度）**强制执行不询问**
 
 ---
 
@@ -140,7 +125,6 @@ bash skills/flagos-container-preparation/tools/setup_workspace.sh $CONTAINER
 - `operator_search.py` — 算子搜索编排
 - `diagnose_ops.py` — 算子快速诊断（崩溃日志解析、精度分组测试、性能热点预扫描）
 - `eval_monitor.py` — 评测监控
-- `install_flagtree.sh` — FlagTree 安装/卸载/验证
 
 ---
 
@@ -165,23 +149,21 @@ bash skills/flagos-container-preparation/tools/setup_workspace.sh $CONTAINER
 │   ├── 01_container_preparation.json
 │   ├── 02_environment_inspection.json
 │   ├── 03_service_startup_default.json
-│   ├── 04_flagtree_installation.json     # 可选
-│   ├── 05_eval_native.json               # 可选
-│   ├── 06_perf_native.json
-│   ├── 07_service_startup_flagos.json
-│   ├── 08_eval_full_flagos.json          # 可选
-│   ├── 09_perf_full_flagos.json
-│   ├── 10_performance_compare.json
-│   ├── 11_operator_replacement.json      # 仅不达标时
-│   ├── 12_perf_optimized.json            # 仅不达标时
-│   └── 13_final_report.json
+│   ├── 04_eval_native.json               # 可选
+│   ├── 05_perf_native.json
+│   ├── 06_service_startup_flagos.json
+│   ├── 07_eval_full_flagos.json
+│   ├── 08_perf_full_flagos.json
+│   ├── 09_performance_compare.json
+│   ├── 10_operator_replacement.json      # 仅不达标时
+│   ├── 11_perf_optimized.json            # 仅不达标时
+│   └── 12_final_report.json
 │
 ├── logs/                                 # 运行日志
 │   ├── startup_default.log
 │   ├── startup_native.log
 │   ├── startup_flagos.log
-│   ├── eval_aime_progress.log
-│   └── eval_erqa_progress.log
+│   └── eval_gpqa_progress.log
 │
 └── config/                               # 使用的配置快照
     ├── perf_config.yaml
@@ -236,18 +218,17 @@ bash skills/flagos-container-preparation/tools/setup_workspace.sh $CONTAINER
 | 步骤 | trace 文件 | 记录的 actions |
 |------|-----------|----------------|
 | ①容器准备 | `01_container_preparation.json` | docker run 命令（含完整参数）、setup_workspace 部署结果 |
-| ②环境检测 | `02_environment_inspection.json` | inspect_env.py 命令、关键输出（包版本、FlagGems 控制方式、FlagTree 状态） |
+| ②环境检测 | `02_environment_inspection.json` | inspect_env.py 命令、关键输出（包版本、FlagGems 控制方式） |
 | ③初始启动 | `03_service_startup_default.json` | 启动命令、env vars、健康检查结果、端口 |
-| ④FlagTree | `04_flagtree_installation.json` | install_flagtree.sh 命令、安装结果、verify 输出 |
-| ⑤精度native | `05_eval_native.json` | 评测方式(remote/local/quick)、提交参数/命令、精度结果 |
-| ⑥性能native | `06_perf_native.json` | benchmark_runner.py 命令（含 --strategy）、用例列表、峰值吞吐 |
-| ⑦启动flagos | `07_service_startup_flagos.json` | toggle 命令、启动命令、ops_list 记录命令、健康检查 |
-| ⑧精度full | `08_eval_full_flagos.json` | 同⑤ |
-| ⑨性能full | `09_perf_full_flagos.json` | 同⑥ |
-| ⑩性能对比 | `10_performance_compare.json` | compare 命令、对比结果摘要（达标/不达标）、返回码 |
-| ⑪算子替换 | `11_operator_replacement.json` | 搜索策略、每轮测试命令、禁用算子列表、最终性能比 |
-| ⑫性能optimized | `12_perf_optimized.json` | 同⑥ |
-| ⑬最终报告 | `13_final_report.json` | 三版对比命令、最终对比表格、结论 |
+| ④精度native | `04_eval_native.json` | 评测方式(GPQA Diamond)、命令、精度结果 |
+| ⑤性能native | `05_perf_native.json` | benchmark_runner.py 命令（含 --strategy）、用例列表、峰值吞吐 |
+| ⑥启动flagos | `06_service_startup_flagos.json` | toggle 命令、启动命令、ops_list 记录命令、健康检查 |
+| ⑦精度full | `07_eval_full_flagos.json` | 同④ |
+| ⑧性能full | `08_perf_full_flagos.json` | 同⑤ |
+| ⑨性能对比 | `09_performance_compare.json` | compare 命令、对比结果摘要（达标/不达标）、返回码 |
+| ⑩算子替换 | `10_operator_replacement.json` | 搜索策略、每轮测试命令、禁用算子列表、最终性能比 |
+| ⑪性能optimized | `11_perf_optimized.json` | 同⑤ |
+| ⑫最终报告 | `12_final_report.json` | 三版对比命令、最终对比表格、结论 |
 
 ### Trace 写入方式
 
@@ -335,13 +316,12 @@ GPU: <gpu_count>x <gpu_type>
 
 1. **性能测试只能通过 `benchmark_runner.py` 执行**，禁止直接运行 `vllm bench serve`
 2. **FlagGems 开关只能通过 `toggle_flaggems.py` 切换**，禁止手动 sed
-3. **FlagTree 安装只能通过 `install_flagtree.sh` 执行**，禁止手动 pip install flagtree
-4. **所有操作在 `/flagos-workspace` 目录下执行**，产出文件按类型分目录：`results/`（交付物）、`traces/`（留痕）、`logs/`（日志）、`config/`（配置快照）
-5. **context.yaml 是 Skill 间共享状态**，每个 Skill 完成后必须更新
-6. **每个 Skill 完成后必须写入对应的 trace JSON**，记录实际执行的命令、参数和关键输出
-7. **禁止添加 SKILL.md 未记录的 vLLM/sglang 启动参数**（如 `--enforce-eager`、`--disable-log-stats` 等），遇到启动问题应分析日志找根因，而非猜测参数绕过
-8. **精度评测和性能测试严禁同时进行**。必须等一个完全结束后再启动另一个。并发执行会互相抢占 GPU 资源，导致两边结果都不可信。启动前必须检查是否有正在运行的评测/测试进程
-9. **算子列表以 `flaggems_enable_oplist.txt` 为唯一权威来源**。每次服务启动后必须检查该文件（默认 `/tmp/flaggems_enable_oplist.txt`）：
+3. **所有操作在 `/flagos-workspace` 目录下执行**，产出文件按类型分目录：`results/`（交付物）、`traces/`（留痕）、`logs/`（日志）、`config/`（配置快照）
+4. **context.yaml 是 Skill 间共享状态**，每个 Skill 完成后必须更新
+5. **每个 Skill 完成后必须写入对应的 trace JSON**，记录实际执行的命令、参数和关键输出
+6. **禁止添加 SKILL.md 未记录的 vLLM/sglang 启动参数**（如 `--enforce-eager`、`--disable-log-stats` 等），遇到启动问题应分析日志找根因，而非猜测参数绕过
+7. **精度评测和性能测试严禁同时进行**。必须等一个完全结束后再启动另一个。并发执行会互相抢占 GPU 资源，导致两边结果都不可信。启动前必须检查是否有正在运行的评测/测试进程
+8. **算子列表以 `flaggems_enable_oplist.txt` 为唯一权威来源**。每次服务启动后必须检查该文件（默认 `/tmp/flaggems_enable_oplist.txt`）：
    - **文件存在且有内容** → FlagGems 实际在运行，以此文件内容作为当前生效的算子列表
    - **文件不存在或为空** → FlagGems 未启用，不依赖任何缓存的算子列表
    - 每次 FlagGems 重新启动都会**重新生成**此文件，内容反映 blacklist 等配置生效后的实际结果

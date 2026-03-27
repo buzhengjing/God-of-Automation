@@ -28,7 +28,6 @@ provides:
   - runtime.framework
   - runtime.thinking_model
   - environment.initial_env_verified
-  - environment.flagtree_env_verified
 ---
 
 # 服务启动 Skill
@@ -44,7 +43,6 @@ provides:
 - `calc_tp_size.py` — TP 自动推算（根据模型大小和 GPU 显存）
 - `toggle_flaggems.py` — FlagGems 开关切换（替代 sed）
 - `wait_for_service.sh` — 服务就绪检测（指数退避）
-- `install_flagtree.sh` — FlagTree 安装/卸载/验证
 
 ---
 
@@ -380,55 +378,7 @@ docker exec $CONTAINER python3 /flagos-workspace/scripts/operator_optimizer.py d
 environment:
   initial_env_verified: true    # 步骤③通过后设为 true
   has_plugin: <from inspection>
-  has_flagtree: <from flagtree.installed>
 ```
-
----
-
-# FlagTree 安装验证流程（步骤④b）
-
-当用户选择安装 FlagTree 后，需要重启服务验证：
-
-## 1. 安装 FlagTree
-
-```bash
-docker exec $CONTAINER bash /flagos-workspace/scripts/install_flagtree.sh install --vendor $GPU_VENDOR
-```
-
-## 2. 验证安装
-
-```bash
-docker exec $CONTAINER bash /flagos-workspace/scripts/install_flagtree.sh verify
-```
-
-## 3. 重启服务（default 模式）
-
-停止现有服务 → 启动（不修改 FlagGems 状态）→ 等待就绪 → API 验证
-
-## 4. 判断结果
-
-- **成功**：写入 `environment.flagtree_env_verified: true`，`environment.flagtree_installed_by_us: true`
-- **失败**：触发恢复流程
-
----
-
-# FlagTree 安装失败恢复（步骤④c）
-
-**⚠️ 强制规则**：FlagTree 安装失败后，禁止在当前容器上继续任何操作（环境已被污染）。
-必须立即执行以下恢复流程，然后从步骤③重新开始。
-
-**优先方案**：重新 `docker run` 新容器
-- 使用 context.yaml 中的 `image` 信息重新创建
-- 需要用户确认（docker run 属于危险操作）
-- 重新执行步骤①②③
-
-**备选方案**（特殊环境如阿里云不能重建容器）：
-```bash
-docker exec $CONTAINER bash /flagos-workspace/scripts/install_flagtree.sh uninstall
-```
-- 卸载 FlagTree 恢复原始 triton
-- 验证服务能否正常启动
-- 写入 `environment.flagtree_env_verified: false`
 
 ---
 

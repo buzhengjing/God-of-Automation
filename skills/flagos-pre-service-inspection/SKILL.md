@@ -1,6 +1,6 @@
 ---
 name: flagos-pre-service-inspection
-description: 启动服务前的容器内环境全面检查，通过 inspect_env.py 一次完成全部检测（含 FlagTree 探测）
+description: 启动服务前的容器内环境全面检查，通过 inspect_env.py 一次完成全部检测
 version: 5.0.0
 license: internal
 triggers:
@@ -20,17 +20,11 @@ provides:
   - flaggems_control.enable_method
   - flaggems_control.disable_method
   - flaggems_control.integration_type
-  - flagtree.installed
-  - flagtree.version
-  - flagtree.triton_version
-  - flagtree.backend
 ---
 
 # 启动服务前准备 Skill
 
 通过 `inspect_env.py` 一次 docker exec 完成全部环境检查（替代原来 10+ 次串行调用），输出结构化 JSON。
-
-**新增**：FlagTree 探测 — 检测容器内是否安装了 FlagTree（统一 Triton 编译器）。
 
 **工具脚本**: `skills/flagos-pre-service-inspection/tools/inspect_env.py`（已由 setup_workspace.sh 部署到容器）
 
@@ -67,11 +61,6 @@ inspection:
     vllm_plugin: "<version>"
   flaggems_capabilities: []
   env_vars: {}
-flagtree:
-  installed: true|false
-  version: "<version>"
-  triton_version: "<version>"
-  backend: "<nvidia|ascend|...>"
 flaggems_control:
   enable_method: ""
   disable_method: ""
@@ -94,24 +83,17 @@ docker exec $CONTAINER python3 /flagos-workspace/scripts/inspect_env.py --output
 - flag 生态组件版本（flaggems, flagscale, flagcx, vllm_plugin）
 - FlagGems 运行时能力探测（capabilities, enable_signature 等）
 - FlagGems 多维度集成方式探测（环境变量/代码扫描/入口点/启动脚本）
-- **FlagTree 安装状态探测**（版本、triton 版本、backend）
 - 推导 enable/disable 方法
 - 环境变量梳理
 
 ## 步骤 2 — 解析 JSON 结果并写入 context.yaml
 
-从 JSON 输出中提取字段，写入 `shared/context.yaml` 的 `execution`、`inspection`、`flagtree`、`flaggems_control` 字段。
-
-**FlagTree 结果解读**：
-- `flagtree.installed: true` — 容器内已预装 FlagTree，步骤④可直接跳过安装
-- `flagtree.installed: false, triton_version 非空` — 有原版 triton，可安装 FlagTree 替换
-- `flagtree.installed: false, triton_version 空` — triton 未安装，需先确认环境
+从 JSON 输出中提取字段，写入 `shared/context.yaml` 的 `execution`、`inspection`、`flaggems_control` 字段。
 
 同时写入 `environment` 字段：
 ```yaml
 environment:
   has_plugin: <vllm_plugin_installed>
-  has_flagtree: <flagtree.installed>
 ```
 
 ## 步骤 3 — 生成报告
@@ -133,8 +115,7 @@ docker exec $CONTAINER python3 /flagos-workspace/scripts/inspect_env.py --report
 - flag 组件版本已记录
 - FlagGems 集成方式已探测（integration_type）
 - FlagGems 启用/关闭方法已推导（enable_method / disable_method）
-- **FlagTree 安装状态已探测**（installed / version / backend）
-- context.yaml 已更新（含 flagtree 和 environment 字段）
+- context.yaml 已更新（含 environment 字段）
 - 报告已生成
 - `traces/02_environment_inspection.json` 已写入（记录 inspect_env.py 命令、关键输出）
 
@@ -147,7 +128,6 @@ docker exec $CONTAINER python3 /flagos-workspace/scripts/inspect_env.py --report
 | torch 未安装 | 镜像可能有问题，建议更换镜像或手动安装 |
 | vllm/sglang 都未安装 | 确认镜像是否为推理镜像 |
 | FlagGems 未安装 | 确认镜像是否包含 FlagGems，或手动安装 |
-| FlagTree 未安装 | 正常情况，步骤④会询问用户是否安装 |
 | inspect_env.py 不存在 | 运行 `setup_workspace.sh` 重新部署 |
 | capabilities 为空列表 | FlagGems 版本过旧，算子替换降级到源码修改模式 |
 | integration_type 为 unknown | 标记为 unknown，后续步骤需人工介入 |

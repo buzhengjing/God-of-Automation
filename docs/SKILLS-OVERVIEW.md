@@ -55,26 +55,20 @@
 ```
 ① container-preparation       容器准备（多入口自动识别）
         ↓
-② pre-service-inspection      环境检测 + FlagGems/FlagTree 探测
+② pre-service-inspection      环境检测 + FlagGems/plugin 探测
         ↓                     → env_report.md + flag_gems_detection.md
 ③ service-startup (default)   以当前环境原样启动，验证初始环境可用
         ↓
-④ [询问用户] 是否安装 FlagTree?
-   ├── 否 → 在当前环境进行三版测试
-   └── 是 → ④a 安装 FlagTree → ④b 重启验证
-             ├── 成功 → 在 plugin+FlagTree 环境继续
-             └── 失败 → ④c 恢复环境（重新 run 或卸载 FlagTree）
-        ↓
-⑤ eval-comprehensive (native)   精度评测（GPQA Diamond，询问用户）
-⑥ performance-testing (native)  Native 性能基线
-⑦ service-startup (flagos)      启用全量 FlagGems
-⑧ eval-comprehensive (full)     精度评测（GPQA Diamond，强制执行）+ 算子报错自动处理
-⑨ performance-testing (full)    Full FlagGems 性能
-⑩ [自动] 性能对比               full_flagos/native ≥ 80%?
-   ├── 是 → Optimized = Full，跳到 ⑬
-   └── 否 → ⑪ operator-replacement（分组二分搜索）
-⑫ performance-testing (optimized) Optimized FlagGems 性能
-⑬ 三版性能对比 + 生成最终报告
+④ eval-comprehensive (native)   精度评测（GPQA Diamond，询问用户）
+⑤ performance-testing (native)  Native 性能基线
+⑥ service-startup (flagos)      启用全量 FlagGems
+⑦ eval-comprehensive (full)     精度评测（GPQA Diamond，强制执行）+ 算子报错自动处理
+⑧ performance-testing (full)    Full FlagGems 性能
+⑨ [自动] 性能对比               full_flagos/native ≥ 80%?
+   ├── 是 → Optimized = Full，跳到 ⑫
+   └── 否 → ⑩ operator-replacement（分组二分搜索）
+⑪ performance-testing (optimized) Optimized FlagGems 性能
+⑫ 三版性能对比 + 生成最终报告
 ```
 
 **三版结果文件**：
@@ -82,12 +76,10 @@
 - `flagos_full.json` — Full FlagGems（全量算子）
 - `flagos_optimized.json` — Optimized FlagGems（≥80% 组合）
 
-**自动化**：步骤⑤~⑬大部分无需人工干预。仅在以下情况询问用户：
+**自动化**：步骤④~⑫大部分无需人工干预。仅在以下情况询问用户：
 - docker run 命令最终确认
-- 是否安装 FlagTree
 - 是否执行精度评测
 - 搜索 3 轮仍未达标时
-- FlagTree 安装失败时是否重新 run 容器
 
 ---
 
@@ -104,7 +96,7 @@
 │         ↓                                                           │
 │  ③ service-startup          启动服务（支持 native/flagos 模式切换）    │
 │         ↓                                                           │
-│  ④ eval-correctness         精度评测（询问用户）                      │
+│  ④ eval-comprehensive         精度评测（GPQA Diamond）                   │
 │         ↓                                                           │
 │  ⑤ performance-testing      性能测试（并发搜索+早停+自动对比）         │
 │                                                                     │
@@ -158,8 +150,6 @@
 
 **启动模式**：default（原始配置，验证初始环境）/ native（关闭 FlagGems）/ flagos（启用 FlagGems）
 
-**新增**：FlagTree 安装验证逻辑 — 安装后重启服务验证，失败自动恢复
-
 ---
 
 ### ④ flagos-eval-comprehensive (精度评测 — GPQA Diamond)
@@ -170,7 +160,7 @@
 | **依赖** | `flagos-service-startup` |
 | **触发词** | `精度评测`, `GPQA`, `fast gpqa`, `comprehensive eval` |
 
-主入口 `fast_gpqa.py`，一条命令跑完 198 题。迁移流程步骤⑤⑧使用本 Skill。
+主入口 `fast_gpqa.py`，一条命令跑完 198 题。迁移流程步骤④⑦使用本 Skill。
 
 远端 FlagRelease 评测使用 `flagos-eval-correctness`（独立 Skill）。
 
@@ -232,10 +222,8 @@
 ### 需要人工确认的环节
 
 1. docker run 命令最终确认
-2. 是否安装 FlagTree
-3. 是否执行精度评测
-4. 搜索 3 轮仍未达标时
-5. FlagTree 安装失败时是否重新 run 容器
+2. 是否执行精度评测
+3. 搜索 3 轮仍未达标时
 
 ---
 
@@ -255,19 +243,16 @@
 │ pre-service-inspection (②)  │──追加──┤
 │ + env_report.md              │        │
 │ + flag_gems_detection.md     │        │
-│ + FlagTree 探测              │        │
 └──────────────────────────────┘        │
                                         ↑
 ┌──────────────────────────────┐        │
 │ service-startup (③ default)  │──追加──┤
 │ → 初始环境验证               │        │
-│ ④ FlagTree 安装（可选）      │        │
-│ → FlagTree 验证              │        │
 └──────────────────────────────┘        │
          │                              ↑
          ↓                              │
 ┌──────────────────────────────┐        │
-│ performance-testing (⑥⑨⑫)   │──追加──┘
+│ performance-testing (⑤⑧⑪)   │──追加──┘
 │ + benchmark_runner.py        │
 │ + performance_compare.py     │
 │ → native_performance.json    │
@@ -278,35 +263,18 @@
          │
          ↓ (< 80% 自动触发)
 ┌──────────────────────────────┐
-│ operator-replacement (⑪)    │
+│ operator-replacement (⑩)    │
 │ + operator_optimizer.py      │
 │ + operator_search.py         │
 │ → operator_config.json       │
 └──────────────────────────────┘
 
 独立工具:
-┌──────────────────┐  ┌──────────────────┐
-│ eval-correctness │  │ log-analyzer (⑦) │
-│ (⑤⑧) 询问用户   │  │ + 失败恢复指引    │
-└──────────────────┘  └──────────────────┘
+┌──────────────────────┐  ┌──────────────────┐
+│ eval-correctness     │  │ log-analyzer     │
+│ (远端 FlagRelease)   │  │ + 失败恢复指引    │
+└──────────────────────┘  └──────────────────┘
 ```
-
----
-
-## FlagTree 说明
-
-**FlagTree** 是统一 Triton 编译器，替换原版 `triton` 包（`import triton` 仍然生效）。
-
-| 属性 | 说明 |
-|------|------|
-| **仓库** | https://github.com/flagos-ai/FlagTree |
-| **版本** | 0.4.0 (Triton 3.1), 0.4.0+3.2, 0.4.0+3.3, 0.4.1+3.5 |
-| **NVIDIA 安装** | `pip install flagtree==0.4.0 --index-url=https://resource.flagos.net/repository/flagos-pypi-hosted/simple` |
-| **源码编译** | `export FLAGTREE_BACKEND=${backend_name} && cd python && pip install . --no-build-isolation -v` |
-| **支持厂商** | NVIDIA, AMD, Ascend, Cambricon, Iluvatar, MooreThreads, KLX, MetaX, HYGON, Tsingmicro, Enflame |
-| **安装脚本** | `install_flagtree.sh install\|uninstall\|verify` |
-
-在工作流步骤④中，系统会询问用户是否安装 FlagTree。安装通过 `install_flagtree.sh` 自动完成。
 
 ---
 

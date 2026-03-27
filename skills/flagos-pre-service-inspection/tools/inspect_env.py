@@ -353,32 +353,6 @@ def _derive_integration_methods(integration):
     integration["disable_method"] = "unknown"
 
 
-def check_flagtree():
-    """检测 FlagTree 安装状态"""
-    result = {
-        "installed": False,
-        "version": "",
-        "triton_version": "",
-        "backend": "",
-    }
-    try:
-        import triton
-        result["triton_version"] = getattr(triton, "__version__", "unknown")
-    except ImportError:
-        return result
-
-    try:
-        import flagtree
-        result["installed"] = True
-        result["version"] = getattr(flagtree, "__version__", "unknown")
-        result["backend"] = getattr(flagtree, "backend", "")
-    except ImportError:
-        # triton 存在但非 FlagTree
-        pass
-
-    return result
-
-
 def check_env_vars():
     """列出所有 flag 相关环境变量"""
     result = {}
@@ -395,7 +369,6 @@ def collect_all():
     flag = check_flag_packages()
     capabilities = probe_flaggems_capabilities()
     integration = scan_flaggems_integration()
-    flagtree = check_flagtree()
     env_vars = check_env_vars()
 
     return {
@@ -419,7 +392,6 @@ def collect_all():
             "oot_ops": capabilities.get("oot_ops", []),
             "env_vars": env_vars,
         },
-        "flagtree": flagtree,
         "flaggems_control": {
             "integration_type": integration["integration_type"],
             "enable_method": integration["enable_method"],
@@ -504,22 +476,6 @@ def output_report(data):
             report.append(f"  {k}={v}")
     else:
         report.append("\n## 环境变量: 无 flag 相关环境变量")
-
-    # FlagTree
-    ft = data.get("flagtree", {})
-    report.append("\n## FlagTree")
-    if ft.get("installed"):
-        report.append(f"  状态:        已安装")
-        report.append(f"  版本:        {ft.get('version', 'unknown')}")
-        report.append(f"  Triton 版本: {ft.get('triton_version', 'unknown')}")
-        if ft.get("backend"):
-            report.append(f"  Backend:     {ft['backend']}")
-    else:
-        triton_ver = ft.get("triton_version", "")
-        if triton_ver:
-            report.append(f"  状态:        未安装（triton {triton_ver} 为原版）")
-        else:
-            report.append(f"  状态:        未安装（triton 也未安装）")
 
     if insp["probe_error"]:
         report.append(f"\n## 探测错误: {insp['probe_error']}")
