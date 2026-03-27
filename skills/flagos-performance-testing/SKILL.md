@@ -27,7 +27,7 @@ provides:
 
 | strategy | 含义 | 用例选择 | 并发行为 | 样本量 |
 |----------|------|----------|----------|--------|
-| `quick` | 烟雾测试 | 只跑 `4k_input_1k_output` + max | 所有 levels 到 256，不早停 + final-burst | `num_prompts=concurrency` |
+| `quick` | 烟雾测试 | 只跑 `4k_input_1k_output` + max | 预热 2 请求 + 所有 levels 到 256，不早停 + final-burst | `num_prompts=concurrency` |
 | `fast` | 饱和即停（默认） | 所有 enabled 用例 | 按 `early_stop` 配置决定 | `num_prompts=concurrency` |
 | `comprehensive` | 全跑 | 所有 enabled 用例 | 所有并发全跑，强制不早停 | `num_prompts=concurrency` |
 | `fixed` | 固定并发 | 只跑有 `fixed_concurrency` 的用例 | 只跑配置的固定并发级别 | `num_prompts=concurrency` |

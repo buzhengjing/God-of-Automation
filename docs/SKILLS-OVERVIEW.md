@@ -65,10 +65,10 @@
              ├── 成功 → 在 plugin+FlagTree 环境继续
              └── 失败 → ④c 恢复环境（重新 run 或卸载 FlagTree）
         ↓
-⑤ eval-correctness (native)     精度评测（询问用户）
+⑤ eval-comprehensive (native)   精度评测（GPQA Diamond，询问用户）
 ⑥ performance-testing (native)  Native 性能基线
 ⑦ service-startup (flagos)      启用全量 FlagGems
-⑧ eval-correctness (full)       精度评测（询问用户）+ 算子报错自动处理
+⑧ eval-comprehensive (full)     精度评测（GPQA Diamond，强制执行）+ 算子报错自动处理
 ⑨ performance-testing (full)    Full FlagGems 性能
 ⑩ [自动] 性能对比               full_flagos/native ≥ 80%?
    ├── 是 → Optimized = Full，跳到 ⑬
@@ -162,15 +162,17 @@
 
 ---
 
-### ④ flagos-eval-correctness (精度评测)
+### ④ flagos-eval-comprehensive (精度评测 — GPQA Diamond)
 
 | 属性 | 说明 |
 |------|------|
-| **功能** | 自动化正确性评测，优先远端 FlagEval API，支持本地降级 |
+| **功能** | GPQA Diamond 快速精度评测，自动适配 thinking/non-thinking 模型，自动探测并发 |
 | **依赖** | `flagos-service-startup` |
-| **触发词** | `精度评测`, `正确性评测`, `accuracy test`, `eval correctness` |
+| **触发词** | `精度评测`, `GPQA`, `fast gpqa`, `comprehensive eval` |
 
-服务启动后、性能测试前询问用户是否执行。错误处理闭环：算子失败→关闭→重启→重评。
+主入口 `fast_gpqa.py`，一条命令跑完 198 题。迁移流程步骤⑤⑧使用本 Skill。
+
+远端 FlagRelease 评测使用 `flagos-eval-correctness`（独立 Skill）。
 
 ---
 

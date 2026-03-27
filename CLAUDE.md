@@ -70,7 +70,7 @@
 
 **Quick 模式**（筛查阶段）：
 - 全 ①-⑬ 步骤完整执行，流程和算子替换逻辑**与标准模式完全一致**
-- 区别仅在于：性能测试用 `--strategy quick`（只跑 4k_input_1k_output + max），精度评测用 `--quick`（AIME25 并发校验：空返回/上下文溢出/thinking 模式检测）
+- 区别仅在于：性能测试用 `--strategy quick`（只跑 4k_input_1k_output + max），精度评测用 GPQA Diamond 快速评测（fast_gpqa.py，自动适配 thinking/non-thinking）
 - 目标：验证流程可走通 + 快速筛查算子问题（启动崩溃、eval 报错、精度不达标、性能不达标）
 - 算子搜索内部始终用 quick benchmark，与外层模式无关
 - **精度评测规则**：步骤⑤（Native 精度）可跳过；步骤⑧（FlagGems 精度）**绝对不能跳过**，因为开启 FlagGems 后必须验证算子兼容性和精度
@@ -78,7 +78,7 @@
 **正式评测**（复测阶段）：
 - Quick 筛查完毕、算子问题已修复后，从步骤⑤或⑥开始复测
 - 性能测试切换为 `fast`（饱和即停）或 `comprehensive`（全跑）
-- 精度评测切换为完整模式（AIME + ERQA 或远端 FlagRelease）
+- 精度评测切换为完整模式（GPQA Diamond 全量 或远端 FlagRelease）
 - 跳过 ①②③④，直接复用已修复的环境和算子配置
 - 产出正式的三版结果文件用于最终报告
 
@@ -157,8 +157,8 @@ bash skills/flagos-container-preparation/tools/setup_workspace.sh $CONTAINER
 │   ├── ops_list.json
 │   ├── performance_compare.csv           # 首次对比
 │   ├── performance_compare_final.csv     # 最终三版对比
-│   ├── aime_result.json
-│   ├── erqa_result.json                  # quick 模式无此文件
+│   ├── gpqa_native.json                  # GPQA Diamond Native 精度
+│   ├── gpqa_flagos.json                  # GPQA Diamond FlagGems 精度
 │   └── eval_result.json                  # 远端评测结果
 │
 ├── traces/                               # 每步留痕（JSON）
@@ -317,7 +317,7 @@ GPU: <gpu_count>x <gpu_type>
     - <op2>: 性能拖慢 (禁用后 +XX%)
 
 精度评测:
-  AIME: XX.X%  ERQA: XX.X%
+  GPQA Diamond: XX.X% (Native) / XX.X% (FlagGems)
   状态: 通过 / 有问题
 
 性能对比:

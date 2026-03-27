@@ -237,6 +237,10 @@ def get_test_case_timeout(test_case: Dict[str, Any]) -> int:
 # Quick 模式最大并发
 QUICK_MAX_CONCURRENCY = 256
 
+# 预热请求数（消除 CUDA kernel 编译、KV cache 分配等冷启动开销）
+WARMUP_NUM_PROMPTS = 2
+WARMUP_CONCURRENCY = 2
+
 # Quick 模式硬编码用例名
 QUICK_TEST_CASE_NAME = "4k_input_1k_output"
 
@@ -374,9 +378,17 @@ def run_quick_test(base_cmd: List[str], levels: List[int],
     快速模式：num_prompts = concurrency，并发最高到 256，不早停。
 
     用于流程验证和快速三版对比，不追求精确结果。
+    正式测试前先发预热请求，消除冷启动开销（结果丢弃）。
     """
     # 并发上限 256
     levels = [l for l in levels if l <= QUICK_MAX_CONCURRENCY]
+
+    # 预热：发少量请求让 GPU/vLLM 完成初始化，结果丢弃
+    if not dry_run:
+        print(f"  [WARMUP] Sending {WARMUP_NUM_PROMPTS} warmup requests (concurrency={WARMUP_CONCURRENCY}) ...")
+        run_benchmark(base_cmd, WARMUP_NUM_PROMPTS, WARMUP_CONCURRENCY, dry_run=False, timeout=timeout)
+        print(f"  [WARMUP] Done, starting benchmark")
+
     results = {}
     best_throughput = 0.0
     best_concurrency = levels[0]

@@ -141,11 +141,24 @@ if [ -f "${PROJECT_ROOT}/skills/flagos-container-preparation/tools/install_flagt
     echo "  ✓ install_flagtree.sh"
 fi
 
-# 评测配置模板
+# 评测配置模板（不存在则跳过）
 if [ -f "${PROJECT_ROOT}/skills/flagos-eval-correctness/tools/config.yaml" ]; then
     docker cp "${PROJECT_ROOT}/skills/flagos-eval-correctness/tools/config.yaml" \
         "${CONTAINER}:/flagos-workspace/eval/config.yaml"
-    echo "  ✓ eval/config.yaml (模板)"
+    echo "  ✓ eval/config.yaml (远端评测模板)"
+fi
+
+# GPQA Diamond 快速精度评测
+if [ -f "${PROJECT_ROOT}/skills/flagos-eval-comprehensive/tools/fast_gpqa.py" ]; then
+    docker cp "${PROJECT_ROOT}/skills/flagos-eval-comprehensive/tools/fast_gpqa.py" \
+        "${CONTAINER}:/flagos-workspace/eval/fast_gpqa.py"
+    SCRIPTS_COPIED=$((SCRIPTS_COPIED + 1))
+    echo "  ✓ eval/fast_gpqa.py"
+fi
+if [ -f "${PROJECT_ROOT}/skills/flagos-eval-comprehensive/tools/fast_gpqa_config.yaml" ]; then
+    docker cp "${PROJECT_ROOT}/skills/flagos-eval-comprehensive/tools/fast_gpqa_config.yaml" \
+        "${CONTAINER}:/flagos-workspace/eval/fast_gpqa_config.yaml"
+    echo "  ✓ eval/fast_gpqa_config.yaml"
 fi
 
 echo "  共复制 ${SCRIPTS_COPIED} 个脚本"
