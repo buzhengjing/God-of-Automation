@@ -180,6 +180,27 @@ docker exec $CONTAINER python3 /flagos-workspace/scripts/calc_tp_size.py --model
 
 将推荐值写入 context.yaml 的 `runtime.tp_size` 和 `runtime.tp_reason`。
 
+## 步骤 2.6 — max_model_len 决策
+
+`--max-model-len` 直接决定模型单次请求能处理的最大 token 数。**确定后写入 context.yaml，后续每次启动复用同一值。**
+
+**决策逻辑**：
+
+1. 读取 `service.max_model_len`
+   - **已有值（>0）** → 直接复用，不重新计算
+   - **为 0（首次）** → 按下方规则计算后写入
+
+2. 首次计算规则：
+
+| 模型类型 | max_model_len | 原因 |
+|---------|---------------|------|
+| Thinking model（Qwen3/QwQ/DeepSeek-R1/R2） | **32768** | thinking chain 需要大量 token，需留余量给 prompt |
+| 标准模型 | **8192** | 非 thinking 模型评测和性能测试够用 |
+
+3. **显存约束**：如果启动 OOM，降级 `max_model_len`（thinking model 最低 16384），并更新 context.yaml
+
+4. **验证**：启动后 `wait_for_service.sh` 输出实际 `max_model_len`，确认与预期一致
+
 ## 步骤 3 — 启动服务
 
 **非 plugin 场景**：
@@ -241,44 +262,7 @@ docker exec -d $CONTAINER bash -c "cd /flagos-workspace && PATH=/opt/conda/bin:\
 - `--served-model-name` 默认使用模型目录名
 - `--tensor-parallel-size` 默认使用 `calc_tp_size.py` 的推荐值（基于模型大小和单卡显存自动推算），fallback 到 GPU 总数
 - 业务环境变量（`VLLM_USE_MODELSCOPE` 等）按需在 docker exec 中追加，不写入模板
-
-### max_model_len 决策规则
-
-`--max-model-len` 直接决定模型单次请求能处理的最大 token 数。**如果设置过小，评测端请求的 `max_tokens` 会被服务端截断，导致推理不完整。**
-
-**决策逻辑**：
-
-1. **判断是否为 thinking model**：
-   - 模型名包含 `Qwen3` / `QwQ` / `DeepSeek-R1` / `DeepSeek-R2` → thinking model
-   - 其他 → 标准模型
-
-2. **根据模型类型选择 max_model_len**：
-
-| 模型类型 | 推荐 max_model_len | 原因 |
-|---------|-------------------|------|
-| Thinking model | **32768** 或更高 | thinking chain 需要 30000+ tokens，需留余量给 prompt |
-| 标准 LLM（性能测试） | **8192** | 性能测试使用固定 input/output 长度，够用即可 |
-| 标准 LLM（精度评测） | **8192** | 非 thinking 模型的评测 max_tokens=8192 |
-
-3. **显存约束**：
-   - `max_model_len` 越大，vLLM 预分配的 KV cache 显存越多
-   - 如果 GPU 显存不足导致 OOM，优先降低 `max_model_len`
-   - Thinking model 最低不应低于 **16384**（否则推理链严重截断）
-
-4. **具体参数**：
-
-```bash
-# Thinking model（如 Qwen3-8B）
-vllm serve <model_path> --max-model-len 32768 ...
-
-# 标准模型（性能测试场景）
-vllm serve <model_path> --max-model-len 8192 ...
-
-# 显存不足时的降级
-vllm serve <model_path> --max-model-len 16384 ...  # thinking model 最低线
-```
-
-5. **验证**：启动后 `wait_for_service.sh` 会输出实际的 `max_model_len`，确认与预期一致。如果评测场景需要 `max_tokens=30000`，则 `max_model_len` 必须 > 30000 + prompt_tokens。
+- `--max-model-len` 使用 context.yaml 中 `service.max_model_len` 的值（由步骤 2.6 决策）
 
 ## 步骤 4 — 等待服务就绪
 

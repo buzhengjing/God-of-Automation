@@ -167,6 +167,7 @@ service:
   enable_oplist_path: ""  # flaggems_enable_oplist.txt 路径（运行时权威算子列表）
   enable_oplist_count: 0  # oplist 中的算子数量
   initial_operator_list: [] # 初始算子列表
+  max_model_len: 0          # 服务启动时的 --max-model-len 值（首次决策后复用）
 
 # ============================================================================
 # 评测信息 (由 eval-comprehensive / eval-correctness 写入)

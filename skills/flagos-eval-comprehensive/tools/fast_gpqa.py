@@ -73,15 +73,95 @@ def query_model_max_len(api_base: str, api_key: str, model_name: str) -> Optiona
     return None
 
 
-def auto_max_tokens(api_base: str, api_key: str, model_name: str) -> int:
-    """自动计算 max_tokens: max_model_len - 8192, clamp 到 [4096, 32768]。"""
+def auto_max_tokens(api_base: str, api_key: str, model_name: str, is_thinking: bool = False) -> Tuple[int, Optional[int]]:
+    """
+    自动计算 max_tokens，基于服务端实际 max_model_len。
+
+    thinking 模型：max_model_len - 8192，下限 8192，不设上限 cap
+    标准模型：max_model_len - 8192，clamp 到 [4096, 32768]
+
+    Returns:
+        (max_tokens, max_model_len or None)
+    """
     max_model_len = query_model_max_len(api_base, api_key, model_name)
     if max_model_len:
         tokens = max_model_len - 8192  # 预留 8K 给 prompt
-        tokens = max(tokens, 4096)     # 兜底最小值
-        tokens = min(tokens, 32768)    # 封顶避免浪费
-        return tokens
-    return 16384  # fallback
+        if is_thinking:
+            tokens = max(tokens, 8192)
+        else:
+            tokens = max(tokens, 4096)
+            tokens = min(tokens, 32768)
+        return tokens, max_model_len
+    # fallback
+    return (16384 if is_thinking else 8192), None
+
+
+# =============================================================================
+# 截断检测
+# =============================================================================
+
+GPQA_SAMPLE_QUESTION = (
+    "What is the probability that a randomly chosen integer between 1 and 100 "
+    "is divisible by both 3 and 7? Show your reasoning step by step."
+)
+
+
+def check_truncation(
+    api_base: str,
+    api_key: str,
+    model_name: str,
+    max_tokens: int,
+    max_model_len: Optional[int],
+) -> Tuple[bool, int]:
+    """
+    发一条样题检查 finish_reason 是否为 length（截断）。
+
+    如果截断，自动将 max_tokens 翻倍（在 max_model_len 允许范围内）。
+
+    Returns:
+        (truncation_detected, adjusted_max_tokens)
+    """
+    base = api_base.rstrip('/')
+    if not base.endswith('/v1'):
+        base = base + '/v1'
+    url = f"{base}/chat/completions"
+
+    headers = {'Content-Type': 'application/json'}
+    if api_key and api_key != 'EMPTY':
+        headers['Authorization'] = f'Bearer {api_key}'
+
+    payload = {
+        'model': model_name,
+        'messages': [{'role': 'user', 'content': GPQA_SAMPLE_QUESTION}],
+        'max_tokens': max_tokens,
+        'temperature': 0.0,
+    }
+
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=120)
+        resp.raise_for_status()
+        data = resp.json()
+
+        choices = data.get('choices', [])
+        if choices:
+            finish_reason = choices[0].get('finish_reason', '')
+            if finish_reason == 'length':
+                print(f"[WARN] 截断检测: finish_reason=length, max_tokens={max_tokens} 不足")
+                # 尝试翻倍
+                new_tokens = max_tokens * 2
+                if max_model_len:
+                    cap = max_model_len - 2048  # 留 2K 给 prompt
+                    new_tokens = min(new_tokens, cap)
+                new_tokens = max(new_tokens, max_tokens)  # 至少不降
+                if new_tokens > max_tokens:
+                    print(f"[WARN] 自动调整 max_tokens: {max_tokens} → {new_tokens}")
+                return True, new_tokens
+            else:
+                print(f"[OK] 截断检测通过: finish_reason={finish_reason}")
+    except Exception as e:
+        print(f"[WARN] 截断检测请求失败: {e}")
+
+    return False, max_tokens
 
 
 # =============================================================================
@@ -249,16 +329,25 @@ def run_fast_gpqa(
     print(f"  模型: {model_name}")
     print(f"  API:  {api_base}")
 
-    # Step 1: 自动设 max_tokens
-    max_tokens = auto_max_tokens(api_base, api_key, model_name)
-    print(f"  max_tokens: {max_tokens} (自动从模型服务获取)")
-
-    # Step 2: 检测 thinking 模型
+    # Step 1: 检测 thinking 模型
     is_thinking = detect_thinking(model_name)
     mode_str = "thinking" if is_thinking else "standard"
     print(f"  模式: {mode_str}")
 
-    # Step 3: 构建 generation_config
+    # Step 2: 自动设 max_tokens（基于 max_model_len 动态计算）
+    max_tokens, max_model_len = auto_max_tokens(api_base, api_key, model_name, is_thinking)
+    if max_model_len:
+        print(f"  max_model_len: {max_model_len} (从服务端获取)")
+    else:
+        print(f"  max_model_len: 未知 (使用 fallback)")
+    print(f"  max_tokens: {max_tokens}")
+
+    # Step 3: 截断检测 — 发样题检查 finish_reason
+    truncation_detected, max_tokens = check_truncation(
+        api_base, api_key, model_name, max_tokens, max_model_len,
+    )
+
+    # Step 4: 构建 generation_config
     if is_thinking:
         gen_config = {
             'max_tokens': max_tokens,
@@ -278,7 +367,7 @@ def run_fast_gpqa(
             'n': 1,
         }
 
-    # Step 4: 构建 dataset_args
+    # Step 5: 构建 dataset_args
     dataset_args = {'gpqa_diamond': {'few_shot_num': 0}}
     if is_thinking:
         dataset_args['gpqa_diamond']['filters'] = {'remove_until': '</think>'}
@@ -289,7 +378,7 @@ def run_fast_gpqa(
     if dataset_dir:
         evalscope_config['dataset_dir'] = dataset_dir
 
-    # Step 5: 探测吞吐，选并发
+    # Step 6: 探测吞吐，选并发
     batch_size, probe_time = probe_throughput(
         model_name=model_name,
         api_url=api_base,
@@ -299,7 +388,7 @@ def run_fast_gpqa(
         evalscope_config=evalscope_config,
     )
 
-    # Step 6: 正式评测
+    # Step 7: 正式评测
     print("-" * 60)
     print(f"[EVAL] 正式评测: gpqa_diamond (198题, 并发={batch_size})")
     print("-" * 60)
@@ -333,13 +422,13 @@ def run_fast_gpqa(
         traceback.print_exc()
         return {'error': str(e)}
 
-    # Step 7: 解析结果
+    # Step 8: 解析结果
     score, raw_details = parse_result(result)
     total_elapsed = round(time.time() - total_start, 2)
     minutes = int(total_elapsed // 60)
     seconds = round(total_elapsed % 60, 1)
 
-    # Step 8: 输出报告
+    # Step 9: 输出报告
     report = {
         'model': model_name,
         'benchmark': 'gpqa_diamond',
@@ -348,6 +437,8 @@ def run_fast_gpqa(
         'total_questions': 198,
         'eval_batch_size': batch_size,
         'max_tokens': max_tokens,
+        'max_model_len': max_model_len,
+        'truncation_detected': truncation_detected,
         'temperature': gen_config['temperature'],
         'probe_time_seconds': probe_time,
         'total_duration_seconds': total_elapsed,

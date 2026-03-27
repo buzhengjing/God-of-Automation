@@ -31,7 +31,8 @@ provides:
 ### 核心特性
 
 - **自动适配所有模型**：自动检测 thinking model（Qwen3/QwQ/DeepSeek-R1/R2），设置对应的 temperature/filters
-- **自动 max_tokens**：查询 `/v1/models` 获取 `max_model_len`，计算 `max_tokens = clamp(max_model_len - 8192, 4096, 32768)`，解决长输出模型（如 Qwen3-Coder-Next）精度被截断的问题
+- **自动 max_tokens**：查询 `/v1/models` 获取 `max_model_len`，thinking 模型 `max_tokens = max(max_model_len - 8192, 8192)` 不设上限 cap，标准模型 clamp 到 [4096, 32768]
+- **截断检测**：评测前发样题检查 `finish_reason`，如果为 `length` 自动翻倍 max_tokens（在 max_model_len 允许范围内）
 - **自动选并发**：探测阶段跑 1 题测耗时，≤5s 选 32 并发，>5s 选 16 并发
 - **数据集预加载**：探测计时前先下载数据集，确保探测结果不含下载时间
 
@@ -110,7 +111,8 @@ docker exec $CONTAINER bash -c "cd /flagos-workspace/eval && \
 
 | 决策项 | 逻辑 |
 |--------|------|
-| max_tokens | 查询 `/v1/models` → `max_model_len - 8192`，clamp 到 [4096, 32768]，失败 fallback 16384 |
+| max_tokens | 查询 `/v1/models` → thinking: `max(max_model_len - 8192, 8192)` 无上限 cap；standard: `clamp(max_model_len - 8192, 4096, 32768)`；fallback thinking=16384, standard=8192 |
+| 截断检测 | 评测前发样题，`finish_reason == "length"` 时自动翻倍 max_tokens |
 | temperature | thinking model → 0.6；standard → 0.0 |
 | top_p | thinking → 0.95；standard → 1.0 |
 | dataset_filters | thinking → `remove_until: </think>`；standard → 无 |
@@ -169,11 +171,13 @@ tools/
 
 1. 加载配置 / 解析 CLI 参数
 2. 验证 API 可达性
-3. 查询 `/v1/models` → 自动计算 max_tokens
-4. 检测 thinking model → 设置 generation_config
-5. 预加载数据集 → 探测 1 题测耗时 → 选并发
-6. 正式评测 198 题
-7. 解析结果 → 输出 JSON 报告 + 终端打印
+3. 检测 thinking model
+4. 查询 `/v1/models` → 自动计算 max_tokens
+5. 截断检测 → 发样题检查 finish_reason，必要时自动调整 max_tokens
+6. 设置 generation_config
+7. 预加载数据集 → 探测 1 题测耗时 → 选并发
+8. 正式评测 198 题
+9. 解析结果 → 输出 JSON 报告 + 终端打印
 
 | CLI 参数 | 说明 |
 |----------|------|
@@ -191,7 +195,7 @@ tools/
 |------|------|----------|
 | `evalscope not found` | 未安装 | `pip install evalscope` |
 | API 不可达 | 服务未启动或地址错误 | 检查 `--api-base`，确认 `curl <api_base>/models` 正常 |
-| 精度异常低 | max_tokens 不够 | 脚本自动计算，检查日志中 `max_tokens` 值是否合理 |
+| 精度异常低 | max_tokens 不够 | 脚本自动计算+截断检测，检查日志中 `truncation_detected` 是否为 true |
 | 探测选并发偏保守 | 首次运行含数据集下载 | 已内置预加载逻辑，第二次运行会准确 |
 | model_id 含 `/` 报路径错误 | 模型名是路径格式 | 已内置 sanitize 逻辑，自动取最后一段 |
 | 双时间戳目录 | EvalScope 内部追加 | 已设 `no_timestamp=True` |
