@@ -170,7 +170,7 @@ service:
   max_model_len: 0          # 服务启动时的 --max-model-len 值（首次决策后复用）
 
 # ============================================================================
-# 评测信息 (由 eval-comprehensive / eval-correctness 写入)
+# 评测信息 (由 eval-comprehensive 写入)
 # ============================================================================
 eval:
   request_id: ""            # 远端评测任务 ID
@@ -179,6 +179,12 @@ eval:
   eval_method: ""           # 评测方式: remote|local
   status: ""                # 评测状态: S|F|C|OOR|running|local
   results: {}               # 最终评测结果
+  v1_score: 0               # V1 (Native) GPQA Diamond 分数 (%)
+  v2_score: 0               # V2 (Full FlagGems) GPQA Diamond 分数 (%)
+  accuracy_diff: 0          # |V2 - V1| 精度偏差 (%)
+  accuracy_aligned: false   # 偏差 ≤5% 为 true
+  accuracy_threshold: 5.0   # 精度对齐阈值 (%)
+  excluded_ops_accuracy: [] # 因精度问题关闭的算子
 
 # ============================================================================
 # 算子替换信息 (由 operator-replacement 写入)
@@ -193,7 +199,7 @@ operator_replacement:
   rollback_info: ""         # 如何还原此次替换操作
 
 # ============================================================================
-# 原生性能基线 (由 performance-testing 写入)
+# V1 性能基线 — Native 无 FlagGems (由 performance-testing 写入)
 # ============================================================================
 native_perf:
   result_path: ""             # native_performance.json 路径
@@ -201,7 +207,7 @@ native_perf:
   total_throughput: 0         # Total token throughput (tok/s)
 
 # ============================================================================
-# FlagOS Full 性能 (由 performance-testing 写入)
+# V2 性能 — Full FlagGems 全量算子 (由 performance-testing 写入)
 # ============================================================================
 flagos_full_perf:
   result_path: ""             # flagos_full.json 路径
@@ -209,7 +215,7 @@ flagos_full_perf:
   total_throughput: 0
 
 # ============================================================================
-# FlagOS Optimized 性能 (由 performance-testing 写入)
+# V3 性能 — Optimized FlagGems 优化后算子 (由 performance-testing 写入)
 # ============================================================================
 flagos_optimized_perf:
   result_path: ""             # flagos_optimized.json 路径
@@ -220,7 +226,7 @@ flagos_optimized_perf:
 # 算子优化 (由 operator-replacement 写入)
 # ============================================================================
 optimization:
-  target_ratio: 0.8           # 性能目标: FlagOS / Native >= 80%
+  target_ratio: 0.8           # 性能目标: 每个用例每个并发级别 FlagOS / V1 >= 80%
   current_ratio: 0            # 当前性能比
   search_phase: ""            # oot | group | done
   plugin_mode: false          # 是否使用 plugin 环境变量控制

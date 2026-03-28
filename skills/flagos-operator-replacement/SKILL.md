@@ -318,7 +318,7 @@ ${CMD_PREFIX} python3 /flagos-workspace/scripts/diagnose_ops.py accuracy-groups 
 
 ## 场景 3：性能不达标 → Profiling 预扫描（缩小搜索范围）
 
-性能低于 80% 时，**先做 profiling 看哪些算子最慢**，再针对性搜索：
+某用例或并发级别性能低于 80% 时，**先做 profiling 看哪些算子最慢**，再针对性搜索：
 
 ```bash
 # 方式 A：配置 profiler 目录后采集
@@ -368,8 +368,8 @@ ${CMD_PREFIX} python3 /flagos-workspace/scripts/diagnose_ops.py profile \
 
 | 触发方式 | 场景 | 模式 |
 |----------|------|------|
-| 评测报错 | eval-correctness 发现算子问题 | **被动排除**（Layer 1-4） |
-| 性能不达标 | performance-testing 发现 FlagOS < 80% native | **主动分组二分搜索** |
+| 评测报错 | eval-comprehensive 发现算子问题 | **被动排除**（Layer 1-4） |
+| 性能不达标 | performance-testing 发现某用例/并发级别 < 80% of V1 | **主动分组二分搜索** |
 
 ---
 
@@ -500,7 +500,7 @@ USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true VLLM_FL_OOT_BLACKLIST=fused_moe VLLM_
 
 ## 触发条件
 
-`performance-testing` 对比结果显示 FlagOS 性能 < 80% native。
+`performance-testing` 对比结果显示 FlagOS 性能在某个用例或并发级别 < 80% of V1。
 
 ## 搜索策略
 
@@ -515,7 +515,7 @@ USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true VLLM_FL_OOT_BLACKLIST=fused_moe VLLM_
     4. if 禁用后性能显著提升 → 加入 oot_blacklist
 
   累积 OOT blacklist 后 benchmark：
-    if ratio >= 80% → 搜索完成
+    if 每个用例每个并发级别 ratio >= 80% → 搜索完成
     else → 进入阶段 2
 
 阶段 2: torch 底层分组二分搜索（沿用现有逻辑，~15 轮）
@@ -793,18 +793,29 @@ optimization:
 算子替换累计报告
 ========================================
 已剔除算子 (共 N 个):
-  1. softmax    — 原因: 精度评测报错 (CUDA error)
-  2. layer_norm — 原因: 精度评测报错 (NaN output)
-  3. fused_moe  — 原因: 性能拖慢 (禁用后 +15%)
-当前启用: 45/48 个算子
+  精度问题:
+    1. softmax    — 精度评测报错 (CUDA error)
+    2. layer_norm — 精度偏差 >5% (V1 vs V2 对比)
+  性能问题:
+    3. fused_moe  — 性能拖慢 (禁用后 +15%)
+
+当前启用算子: 35/38 个
+启用列表: [addmm, mm, bmm, cos, sin, ...]
+
+当前禁用算子: 3 个
+禁用列表: [softmax, layer_norm, fused_moe]
+
 替换方式: plugin_env / yaml_config / only_enable / source_edit
+V2 (Full) → V3 (Optimized) 性能比: 95.2% of V1 (Native)
 ========================================
 ```
 
 **报告规则**：
 - 每次替换后累计更新，不是只报告本次
-- 区分精度原因和性能原因
+- **分类展示**：精度问题和性能问题分开列出
 - 性能原因标注禁用后的提升幅度
+- **必须输出完整的启用算子列表和禁用算子列表**
+- 标注当前 V3 相对 V1 的性能比
 
 ---
 

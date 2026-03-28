@@ -191,6 +191,128 @@ def _preload_dataset(dataset_hub: str, dataset_dir: Optional[str] = None):
         pass  # 预加载失败不影响后续，evalscope 会自行下载
 
 
+def _probe_single_latency(api_base: str, api_key: str, model_name: str,
+                           max_tokens: int, is_thinking: bool) -> float:
+    """直接调 OpenAI API 测一条推理的纯推理时间（剥离 evalscope 框架开销）"""
+    SAMPLE_QUESTION = (
+        "What is the result of the Diels-Alder reaction between cyclopentadiene "
+        "and maleic anhydride? Choose the most likely product."
+    )
+    payload = {
+        'model': model_name,
+        'messages': [{'role': 'user', 'content': SAMPLE_QUESTION}],
+        'max_tokens': max_tokens,
+        'temperature': 0.6 if is_thinking else 0.0,
+    }
+    headers = {'Content-Type': 'application/json'}
+    if api_key and api_key != 'EMPTY':
+        headers['Authorization'] = f'Bearer {api_key}'
+
+    base = api_base.rstrip('/')
+    if not base.endswith('/v1'):
+        base = base + '/v1'
+    url = f"{base}/chat/completions"
+
+    start = time.time()
+    resp = requests.post(url, json=payload, headers=headers, timeout=300)
+    resp.raise_for_status()
+    latency = time.time() - start
+    return latency
+
+
+def _estimate_concurrency(latency: float, is_thinking: bool) -> list:
+    """基于单条延迟估算候选并发范围。thinking 模型输出长度波动大，保守选择。"""
+    if is_thinking:
+        if latency <= 10:
+            return [8, 16, 32]
+        elif latency <= 30:
+            return [4, 8, 16]
+        elif latency <= 60:
+            return [2, 4, 8]
+        else:
+            return [1, 2, 4]
+    else:
+        if latency <= 3:
+            return [16, 32, 64]
+        elif latency <= 10:
+            return [8, 16, 32]
+        elif latency <= 30:
+            return [4, 8, 16]
+        else:
+            return [2, 4, 8]
+
+
+def _run_concurrent_probe(api_base: str, api_key: str, model_name: str,
+                           max_tokens: int, is_thinking: bool,
+                           concurrency: int, num_requests: int = 3) -> Tuple[float, int]:
+    """并发发 num_requests 个请求，返回 (throughput_rps, error_count)"""
+    import concurrent.futures
+
+    SAMPLE_QUESTION = (
+        "What is the result of the Diels-Alder reaction between cyclopentadiene "
+        "and maleic anhydride? Choose the most likely product."
+    )
+    payload = {
+        'model': model_name,
+        'messages': [{'role': 'user', 'content': SAMPLE_QUESTION}],
+        'max_tokens': max_tokens,
+        'temperature': 0.6 if is_thinking else 0.0,
+    }
+    headers = {'Content-Type': 'application/json'}
+    if api_key and api_key != 'EMPTY':
+        headers['Authorization'] = f'Bearer {api_key}'
+
+    base = api_base.rstrip('/')
+    if not base.endswith('/v1'):
+        base = base + '/v1'
+    url = f"{base}/chat/completions"
+
+    actual_n = min(concurrency, num_requests)
+    errors = 0
+
+    def _send_one():
+        try:
+            r = requests.post(url, json=payload, headers=headers, timeout=300)
+            r.raise_for_status()
+            return True
+        except Exception:
+            return False
+
+    start = time.time()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures = [pool.submit(_send_one) for _ in range(actual_n)]
+        for f in concurrent.futures.as_completed(futures):
+            if not f.result():
+                errors += 1
+    elapsed = time.time() - start
+
+    throughput = (actual_n - errors) / elapsed if elapsed > 0 else 0
+    return throughput, errors
+
+
+def _validate_concurrency(api_base: str, api_key: str, model_name: str,
+                           candidates: list, max_tokens: int,
+                           is_thinking: bool) -> int:
+    """对候选并发各跑 3 题，选吞吐最高且无 OOM/超时的。"""
+    best_concurrency = candidates[0]
+    best_throughput = 0.0
+
+    for c in candidates:
+        throughput, errors = _run_concurrent_probe(
+            api_base, api_key, model_name, max_tokens, is_thinking,
+            concurrency=c, num_requests=3,
+        )
+        print(f"  并发 {c}: throughput={throughput:.2f} rps, errors={errors}")
+        if errors == 0 and throughput > best_throughput:
+            best_throughput = throughput
+            best_concurrency = c
+        elif errors > 0:
+            print(f"  并发 {c} 出现错误，跳过更高并发")
+            break
+
+    return best_concurrency
+
+
 def probe_throughput(
     model_name: str,
     api_url: str,
@@ -200,58 +322,37 @@ def probe_throughput(
     evalscope_config: Dict,
 ) -> Tuple[int, float]:
     """
-    用 limit=1 跑 1 题 GPQA Diamond，测量单条推理耗时，自动选并发。
+    三阶段并发探测：
+    1. 直接 API 调用测单条推理延迟（剥离 evalscope 框架开销）
+    2. 基于延迟 + thinking 模型特性估算候选并发
+    3. 快速验证（3 题并发测试，选最优）
 
     Returns:
         (eval_batch_size, probe_elapsed_seconds)
     """
-    from evalscope import TaskConfig, run_task
-    from evalscope.constants import EvalType
+    is_thinking = detect_thinking(model_name)
+    max_tokens = generation_config.get('max_tokens', 4096)
 
-    # 先预加载数据集，排除下载时间对探测的影响
-    print("[PROBE] 预加载数据集 ...")
-    _preload_dataset(
-        evalscope_config.get('dataset_hub', 'modelscope'),
-        evalscope_config.get('dataset_dir'),
-    )
-
-    model_id = _sanitize_model_id(model_name)
-    probe_work_dir = 'outputs/gpqa_diamond_probe'
-
-    task_kwargs = dict(
-        model=model_name,
-        model_id=model_id,
-        api_url=api_url,
-        api_key=api_key,
-        eval_type=EvalType.OPENAI_API,
-        datasets=['gpqa_diamond'],
-        dataset_args=dataset_args,
-        eval_batch_size=1,
-        generation_config=generation_config,
-        dataset_hub=evalscope_config.get('dataset_hub', 'modelscope'),
-        work_dir=probe_work_dir,
-        no_timestamp=True,
-    )
-    dataset_dir = evalscope_config.get('dataset_dir')
-    if dataset_dir:
-        task_kwargs['dataset_dir'] = dataset_dir
-
-    task_cfg = TaskConfig(**task_kwargs)
-    task_cfg.limit = 1
-
-    print("[PROBE] 探测阶段: 跑 1 题测量吞吐 ...")
-    start = time.time()
+    # 阶段 1: 纯 API 延迟
+    print("[PROBE] 阶段1: 测量单条推理延迟（直接 API 调用）...")
     try:
-        run_task(task_cfg=task_cfg)
+        latency = _probe_single_latency(api_url, api_key, model_name, max_tokens, is_thinking)
+        print(f"[PROBE] 单条延迟: {latency:.1f}s (thinking={is_thinking})")
     except Exception as e:
-        print(f"[PROBE] 探测失败: {e}")
+        print(f"[PROBE] 延迟探测失败: {e}")
         print("[PROBE] 使用默认并发 16")
         return 16, 0.0
 
-    elapsed = round(time.time() - start, 2)
-    batch_size = 32 if elapsed <= 5 else 16
-    print(f"[PROBE] 单条推理耗时: {elapsed}s → 选择并发: {batch_size}")
-    return batch_size, elapsed
+    # 阶段 2: 估算候选
+    candidates = _estimate_concurrency(latency, is_thinking)
+    print(f"[PROBE] 候选并发: {candidates}")
+
+    # 阶段 3: 快速验证
+    print("[PROBE] 阶段2: 验证候选并发（每档 3 题）...")
+    best = _validate_concurrency(api_url, api_key, model_name, candidates, max_tokens, is_thinking)
+    print(f"[PROBE] 最终选择并发: {best}")
+
+    return best, latency
 
 
 # =============================================================================

@@ -58,7 +58,8 @@ def get_gpu_info():
         if torch.cuda.is_available():
             count = torch.cuda.device_count()
             if count > 0:
-                mem_bytes = torch.cuda.get_device_properties(0).total_mem
+                props = torch.cuda.get_device_properties(0)
+                mem_bytes = getattr(props, 'total_memory', None) or getattr(props, 'total_mem', 0)
                 name = torch.cuda.get_device_name(0)
                 return {
                     "count": count,
@@ -151,12 +152,16 @@ def calc_tp(model_size_gb, gpu_memory_gb, gpu_count):
 
 
 def main():
+    global OVERHEAD_FACTOR
+
     parser = argparse.ArgumentParser(description="自动推算 tensor-parallel-size")
     parser.add_argument("--model-path", required=True, help="模型权重目录路径")
     parser.add_argument("--json", action="store_true", help="JSON 格式输出")
     parser.add_argument("--overhead", type=float, default=OVERHEAD_FACTOR,
                         help=f"显存安全系数 (默认 {OVERHEAD_FACTOR})")
     args = parser.parse_args()
+
+    OVERHEAD_FACTOR = args.overhead
 
     model_path = args.model_path
     if not os.path.isdir(model_path):
@@ -176,8 +181,6 @@ def main():
         sys.exit(1)
 
     # 3. 计算推荐 TP
-    global OVERHEAD_FACTOR
-    OVERHEAD_FACTOR = args.overhead
     tp, reason = calc_tp(model_size_gb, gpu_info["memory_gb"], gpu_info["count"])
 
     estimated_required_gb = round(model_size_gb * OVERHEAD_FACTOR, 1)

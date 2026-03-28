@@ -36,8 +36,8 @@ provides:
 
 **启动模式**：
 - **default** — 不修改任何 FlagGems 状态，以容器现有配置原样启动。用于步骤③验证初始环境可用性。
-- **native** — 关闭 FlagGems，纯原生环境。
-- **flagos** — 启用全量 FlagGems。
+- **native** — 关闭 FlagGems，纯原生环境。对应 V1 版本。
+- **flagos** — 启用全量 FlagGems。对应 V2 版本。
 
 **工具脚本**（已由 setup_workspace.sh 部署到容器）:
 - `calc_tp_size.py` — TP 自动推算（根据模型大小和 GPU 显存）
@@ -342,6 +342,27 @@ docker exec $CONTAINER python3 /flagos-workspace/scripts/operator_optimizer.py d
 - 如果启动模式为 flagos 但文件不存在 → 异常，需排查（服务可能未正确加载 FlagGems）
 - 如果启动模式为 native 但文件存在 → 可能是上次 flagos 的残留，不应作为当前算子列表
 - 每次 FlagGems 重新启动都会**重新生成**此文件，内容反映最新的算子配置（含 blacklist 生效后的结果）
+
+**Native 模式残留检测**：
+
+native 模式启动后，如果发现 `flaggems_enable_oplist.txt` 仍然存在，执行以下检查：
+
+```bash
+# 获取 oplist 文件修改时间和服务启动时间
+OPLIST_MTIME=$(${CMD_PREFIX} stat -c %Y /tmp/flaggems_enable_oplist.txt 2>/dev/null || echo 0)
+SERVICE_START=$(${CMD_PREFIX} stat -c %Y /proc/1/cmdline 2>/dev/null || echo 999999999)
+
+if [ "$OPLIST_MTIME" -lt "$SERVICE_START" ]; then
+    echo "检测到旧 oplist 残留（mtime < 服务启动时间），清理中..."
+    ${CMD_PREFIX} rm -f /tmp/flaggems_enable_oplist.txt
+    echo "已清理残留 oplist 文件"
+else
+    echo "WARNING: native 模式下 oplist 文件 mtime 晚于服务启动，可能 FlagGems 未正确关闭"
+fi
+```
+
+- mtime 早于本次服务启动时间 → 旧残留，清理并记录到 trace
+- mtime 晚于启动时间 → 异常，FlagGems 可能未正确关闭，报告给用户
 
 **反馈输出**：
 ```

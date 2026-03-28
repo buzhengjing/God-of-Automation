@@ -66,7 +66,7 @@ def load_yaml(path: Path) -> Dict[str, Any]:
 
 
 def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
-    """加载配置文件"""
+    """加载配置文件，缺失字段自动从 context.yaml 回填"""
     cfg_path = Path(config_path) if config_path else DEFAULT_CONFIG_PATH
     config = load_yaml(cfg_path)
 
@@ -74,6 +74,27 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
         config["server"] = {"host": "", "port": 8000}
     if "model" not in config:
         config["model"] = {"name": "", "tokenizer_path": ""}
+
+    # Fallback: 从 context.yaml 补充缺失的 server.host / model.tokenizer_path
+    if not config["server"].get("host") or not config["model"].get("tokenizer_path"):
+        ctx_path = Path("/flagos-workspace/shared/context.yaml")
+        if ctx_path.exists():
+            try:
+                ctx = load_yaml(ctx_path)
+                svc = ctx.get("service", {})
+                if not config["server"].get("host"):
+                    config["server"]["host"] = svc.get("host", "127.0.0.1")
+                if not config["server"].get("port") or config["server"]["port"] == 8000:
+                    port = svc.get("port")
+                    if port:
+                        config["server"]["port"] = port
+                if not config["model"].get("tokenizer_path"):
+                    config["model"]["tokenizer_path"] = ctx.get("model", {}).get("path", "")
+                if not config["model"].get("name"):
+                    config["model"]["name"] = ctx.get("model", {}).get("name", "")
+                print(f"[INFO] 从 context.yaml 补充了缺失配置")
+            except Exception as e:
+                print(f"[WARN] 读取 context.yaml 失败: {e}")
 
     return config
 

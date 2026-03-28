@@ -1,6 +1,6 @@
 ---
 name: flagos-performance-testing
-description: 三版性能基准测试（Native / Full FlagGems / Optimized FlagGems），四档策略（quick/fast/comprehensive/fixed）、可选 final-burst、per-test-case 超时、标准 markdown 输出格式
+description: 三版性能基准测试（V1 Native / V2 Full FlagGems / V3 Optimized FlagGems），四档策略（quick/fast/comprehensive/fixed）、可选 final-burst、per-test-case 超时、标准 markdown 输出格式
 version: 7.1.0
 triggers:
   - 性能测试
@@ -21,7 +21,7 @@ provides:
 
 # 性能测试 Skill
 
-支持三版自动化性能测试：Native → Full FlagGems → Optimized FlagGems（如需优化），标准 markdown 三列表格输出。
+支持三版自动化性能测试：V1 (Native) → V2 (Full FlagGems) → V3 (Optimized FlagGems)（如需优化），标准 markdown 三列表格输出。
 
 **四档测试策略**（`--strategy` 参数）：
 
@@ -55,9 +55,9 @@ provides:
 **Final Burst**：默认不跑。用户显式传入 `--final-burst` 才追加无限制并发大规模测试。一旦用户选择了 `--final-burst`，后续同流程的所有性能测试都加此 flag。
 
 **三版结果文件**：
-- `native_performance.json` — Native（无 FlagGems）
-- `flagos_full.json` — Full FlagGems（全量算子）
-- `flagos_optimized.json` — Optimized FlagGems（≥80% 组合，如需优化才产出）
+- `native_performance.json` — V1 (Native，无 FlagGems)
+- `flagos_full.json` — V2 (Full FlagGems，全量算子)
+- `flagos_optimized.json` — V3 (Optimized FlagGems，≥80% 组合，如需优化才产出)
 
 **工具脚本**（已由 setup_workspace.sh 部署到容器）:
 - `benchmark_runner.py` — 性能测试（`--strategy quick/fast/comprehensive/fixed` + 可选 `--final-burst`）
@@ -130,16 +130,16 @@ except Exception as e:
 ## 核心原则：三版测试 + 按需优化
 
 新工作流按固定顺序执行三版测试：
-1. **Native**（步骤⑥）— 关闭 FlagGems 的基线性能
-2. **Full FlagGems**（步骤⑨）— 启用全量 FlagGems 的性能
-3. **Optimized FlagGems**（步骤⑫）— 仅在 Full 不达标时，通过算子优化找到 ≥80% 的组合
+1. **V1 Native**（步骤⑤）— 关闭 FlagGems 的基线性能
+2. **V2 Full FlagGems**（步骤⑧）— 启用全量 FlagGems 的性能
+3. **V3 Optimized FlagGems**（步骤⑪）— 仅在 V2 不达标时，通过算子优化找到每个用例每个并发级别均 ≥80% 的组合
 
 **算子列表必录**：只要 FlagGems 处于启用状态，必须记录算子列表到 ops_list.json，这是算子优化的基础。
 
 最终需要三个结果文件：
-1. **native_performance.json** — Native 性能
-2. **flagos_full.json** — Full FlagGems 性能
-3. **flagos_optimized.json** — Optimized FlagGems 性能（仅在不达标时产出）
+1. **native_performance.json** — V1 性能
+2. **flagos_full.json** — V2 性能
+3. **flagos_optimized.json** — V3 性能（仅在不达标时产出）
 
 ## 步骤 0：策略确定
 
@@ -197,13 +197,13 @@ test_matrix:
 
 ```
 当前状态判定:
-  ├── FlagGems 已启用 → 走路径 A（先测 FlagOS）
-  └── FlagGems 未启用 → 走路径 B（先测 Native）
+  ├── FlagGems 已启用 → 走路径 A（先测 V2）
+  └── FlagGems 未启用 → 走路径 B（先测 V1）
 ```
 
 ---
 
-## 步骤 3：运行 Native 基线测试（步骤⑥）
+## 步骤 3：运行 V1 基线测试（步骤⑤）
 
 此时服务已以 native 模式启动（FlagGems 关闭）。
 
@@ -235,7 +235,7 @@ print(f'已记录 {len(ops)} 个算子到 ops_list.json')
 "
 ```
 
-## 步骤 6：运行 Full FlagGems 性能测试（步骤⑨）
+## 步骤 6：运行 V2 Full FlagGems 性能测试（步骤⑧）
 
 ```bash
 docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/benchmark_runner.py \
@@ -246,7 +246,7 @@ docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/benchmark
   --mode flagos_full"
 ```
 
-## 步骤 7：性能对比（步骤⑩）
+## 步骤 7：性能对比（步骤⑨）
 
 ```bash
 docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/performance_compare.py \
@@ -257,8 +257,8 @@ docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/performan
   --format markdown"
 ```
 
-- 返回码 `0`：所有用例 ≥ 80%，Optimized = Full，跳到步骤 9
-- 返回码 `1`：有不达标用例，触发步骤 8
+- 返回码 `0`：每个用例的每个并发级别均 ≥ 80%，V3 = V2，跳到步骤 9
+- 返回码 `1`：有不达标的用例或并发级别，触发步骤 8
 
 ## 步骤 8：[自动] 触发算子优化（步骤⑪）
 
@@ -372,14 +372,14 @@ Native 基线: 6500 tok/s（首次 native 测试时不显示此行）
 - native_performance.json 已生成
 - flagos_full.json 已生成
 - 对比结果已生成（performance_compare.csv）
-- 性能比率已判断（≥ 80% 或触发算子优化）
+- 性能比率已判断（每个用例的每个并发级别均 ≥ 80%，或触发算子优化）
 - 如触发优化：flagos_optimized.json 已生成
 - 最终三版对比已生成（performance_compare_final.csv）
 - context.yaml 已更新
 - 配置快照已保存到 `config/perf_config.yaml`
 - 对应 trace 文件已写入：
-  - `traces/06_perf_native.json`（Native 性能测试）
-  - `traces/09_perf_full_flagos.json`（Full FlagGems 性能测试）
-  - `traces/10_performance_compare.json`（性能对比）
-  - `traces/12_perf_optimized.json`（仅不达标时）
+  - `traces/05_perf_v1.json`（V1 性能测试）
+  - `traces/08_perf_v2.json`（V2 性能测试）
+  - `traces/09_performance_compare.json`（性能对比）
+  - `traces/11_perf_v3.json`（仅不达标时）
   - `traces/13_final_report.json`（最终报告）

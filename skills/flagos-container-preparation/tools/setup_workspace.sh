@@ -115,8 +115,8 @@ if [ -d "${PROJECT_ROOT}/skills/flagos-performance-testing/config" ]; then
     echo "  ✓ perf/config/"
 fi
 
-# 评测脚本
-for eval_script in "${PROJECT_ROOT}"/skills/flagos-eval-correctness/tools/eval_*.py; do
+# 评测脚本（已统一到 eval-comprehensive）
+for eval_script in "${PROJECT_ROOT}"/skills/flagos-eval-comprehensive/tools/eval_*.py; do
     if [ -f "$eval_script" ]; then
         docker cp "$eval_script" "${CONTAINER}:/flagos-workspace/scripts/"
         echo "  ✓ $(basename "$eval_script")"
@@ -133,10 +133,10 @@ if [ -f "${PROJECT_ROOT}/skills/flagos-service-startup/tools/calc_tp_size.py" ];
 fi
 
 # 评测配置模板（不存在则跳过）
-if [ -f "${PROJECT_ROOT}/skills/flagos-eval-correctness/tools/config.yaml" ]; then
-    docker cp "${PROJECT_ROOT}/skills/flagos-eval-correctness/tools/config.yaml" \
+if [ -f "${PROJECT_ROOT}/skills/flagos-eval-comprehensive/tools/config.yaml" ]; then
+    docker cp "${PROJECT_ROOT}/skills/flagos-eval-comprehensive/tools/config.yaml" \
         "${CONTAINER}:/flagos-workspace/eval/config.yaml"
-    echo "  ✓ eval/config.yaml (远端评测模板)"
+    echo "  ✓ eval/config.yaml (评测配置模板)"
 fi
 
 # GPQA Diamond 快速精度评测
@@ -154,10 +154,21 @@ fi
 
 echo "  共复制 ${SCRIPTS_COPIED} 个脚本"
 
+# 2.5. 确保 context.yaml 存在
+if ! docker exec "${CONTAINER}" test -f /flagos-workspace/shared/context.yaml 2>/dev/null; then
+    if [ -f "${PROJECT_ROOT}/shared/context.yaml" ]; then
+        docker cp "${PROJECT_ROOT}/shared/context.yaml" "${CONTAINER}:/flagos-workspace/shared/context.yaml"
+        echo "  ✓ shared/context.yaml (从模板创建)"
+    else
+        docker exec "${CONTAINER}" bash -c "echo '# FlagOS context' > /flagos-workspace/shared/context.yaml"
+        echo "  ✓ shared/context.yaml (空文件)"
+    fi
+fi
+
 # 3. 安装脚本依赖（如需要）
 echo "[3/4] 检查脚本依赖..."
 docker exec "${CONTAINER}" bash -c "
-    python3 -c 'import yaml' 2>/dev/null || pip install pyyaml -q 2>/dev/null || true
+    PATH=/opt/conda/bin:\$PATH python3 -c 'import yaml' 2>/dev/null || PATH=/opt/conda/bin:\$PATH pip install pyyaml -q 2>/dev/null || true
 "
 echo "  依赖检查完成"
 

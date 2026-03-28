@@ -30,14 +30,14 @@ claude "
 ① container-preparation       → 容器准备（多入口自动识别）
 ② pre-service-inspection      → 环境检测 + plugin 探测
 ③ service-startup (default)   → 以当前环境原样启动，验证初始环境可用
-④ eval-comprehensive (native) → 询问用户是否执行精度评测
-⑤ performance-testing (native) → Native 性能基线
+④ eval-comprehensive (V1)     → V1 精度评测（询问用户）
+⑤ performance-testing (V1)    → V1 性能基线
 ⑥ service-startup (flagos)    → 启用全量 FlagGems
-⑦ eval-comprehensive (full)   → 精度评测（强制执行）
-⑧ performance-testing (full)  → Full FlagGems 性能
-⑨ [自动] 性能对比             → full/native ≥ 80%?
+⑦ eval-comprehensive (V2)     → V2 精度评测（强制执行）+ V1 vs V2 精度对比
+⑧ performance-testing (V2)    → V2 Full FlagGems 性能
+⑨ [自动] 性能对比             → V2/V1 ≥ 80%?
 ⑩ [条件] operator-replacement → 性能不达标时自动优化
-⑪ performance-testing (opt)   → Optimized FlagGems 性能
+⑪ performance-testing (V3)    → V3 Optimized FlagGems 性能
 ⑫ 三版性能对比 + 最终报告     → final_report.md
 \`\`\`
 

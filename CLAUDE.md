@@ -27,8 +27,7 @@
 | 启动服务 / start service / 健康检查 | flagos-service-startup | `skills/flagos-service-startup/SKILL.md` |
 | 性能测试 / benchmark / vllm bench | flagos-performance-testing | `skills/flagos-performance-testing/SKILL.md` |
 | 算子替换 / operator replacement / 算子优化 | flagos-operator-replacement | `skills/flagos-operator-replacement/SKILL.md` |
-| 精度评测 / eval correctness / accuracy test | flagos-eval-correctness | `skills/flagos-eval-correctness/SKILL.md` |
-| 综合评测 / comprehensive eval / 本地评测 / quick 评测 / evalscope | flagos-eval-comprehensive | `skills/flagos-eval-comprehensive/SKILL.md` |
+| 精度评测 / eval correctness / accuracy test / 远端评测 / FlagRelease / flageval / 综合评测 / comprehensive eval / 本地评测 / quick 评测 / evalscope / GPQA | flagos-eval-comprehensive | `skills/flagos-eval-comprehensive/SKILL.md` |
 | 日志分析 / analyze logs | flagos-log-analyzer | `skills/flagos-log-analyzer/SKILL.md` |
 
 ---
@@ -39,22 +38,22 @@
 
 **核心变更**：拿到环境后先验证初始服务可用，检测 plugin，再进行三版性能测试。
 
-**三版测试**：Native → Optimized FlagGems（≥80%）→ Full FlagGems
+**三版测试**：V1 (Native) → V2 (Full FlagGems) → V3 (Optimized FlagGems)
 
 ```
 ① container-preparation       → 容器准备（含本地权重检查 + 多入口自动识别）
 ② pre-service-inspection      → 环境检测（plugin 探测）
 ③ service-startup (default)   → 以当前环境原样启动服务，验证初始环境可用
-④ eval-comprehensive (native)    → 精度评测（询问用户，quick 模式可跳过）
-⑤ performance-testing (native)   → Native 性能基线（关闭 FlagGems）
-⑥ service-startup (flagos)       → 启用全量 FlagGems
-⑦ eval-comprehensive (full-flagos)→ 精度评测（**必须执行，不可跳过**）+ 算子报错自动处理
-⑧ performance-testing (full)    → Full FlagGems 性能
-⑨ [自动] 性能对比               → full_flagos/native ≥ 80%?
-   ├── 是 → Optimized = Full，跳到 ⑫
+④ eval-comprehensive (V1)     → V1 精度评测（询问用户，quick 模式可跳过）
+⑤ performance-testing (V1)    → V1 性能基线（关闭 FlagGems）
+⑥ service-startup (flagos)    → 启用全量 FlagGems
+⑦ eval-comprehensive (V2)     → V2 精度评测（**必须执行，不可跳过**）+ V1 vs V2 精度对比 + 算子报错自动处理
+⑧ performance-testing (V2)    → V2 Full FlagGems 性能
+⑨ [自动] 性能对比             → V2/V1 ≥ 80%?
+   ├── 是 → V3 = V2，跳到 ⑫
    └── 否 → ⑩ operator-replacement（分组二分搜索）
              → 找到 ≥80% 的算子组合
-⑪ performance-testing (optimized) → Optimized FlagGems 性能（搜索过程中已产出）
+⑪ performance-testing (V3)    → V3 Optimized FlagGems 性能（搜索过程中已产出）
 ⑫ 三版性能对比 + 生成最终报告
 ```
 
@@ -67,7 +66,7 @@
 - 区别仅在于：性能测试用 `--strategy quick`（只跑 4k_input_1k_output + max），精度评测用 GPQA Diamond 快速评测（fast_gpqa.py，自动适配 thinking/non-thinking）
 - 目标：验证流程可走通 + 快速筛查算子问题（启动崩溃、eval 报错、精度不达标、性能不达标）
 - 算子搜索内部始终用 quick benchmark，与外层模式无关
-- **精度评测规则**：步骤④（Native 精度）可跳过；步骤⑦（FlagGems 精度）**绝对不能跳过**，因为开启 FlagGems 后必须验证算子兼容性和精度
+- **精度评测规则**：步骤④（V1 精度）可跳过；步骤⑦（V2 精度）**绝对不能跳过**，因为开启 FlagGems 后必须验证算子兼容性和精度
 
 **正式评测**（复测阶段）：
 - Quick 筛查完毕、算子问题已修复后，从步骤④或⑤开始复测
@@ -77,9 +76,9 @@
 - 产出正式的三版结果文件用于最终报告
 
 **三版结果文件**（均位于 `results/` 目录下）：
-- `results/native_performance.json` — Native（无 FlagGems）
-- `results/flagos_full.json` — Full FlagGems（全量算子）
-- `results/flagos_optimized.json` — Optimized FlagGems（≥80% 组合）
+- `results/native_performance.json` — V1 (Native，无 FlagGems)
+- `results/flagos_full.json` — V2 (Full FlagGems，全量算子)
+- `results/flagos_optimized.json` — V3 (Optimized FlagGems，≥80% 组合)
 
 ---
 
@@ -90,7 +89,7 @@
 | 决策项 | 默认值 | 说明 |
 |--------|--------|------|
 | FlagGems 仓库地址 | `https://github.com/FlagOpen/FlagGems.git` | 无需用户提供 |
-| 性能目标 | 80% of native | 不询问"目标是多少" |
+| 性能目标 | 每个用例的每个并发级别均 ≥ 80% of V1 | 不询问"目标是多少" |
 | pip install 模式 | `pip install .`（非 editable） | 避免 `-e .` 在容器中的问题 |
 | 服务端口 | 从 README/容器配置中提取 | 不询问端口号 |
 | GPU 设备 | 使用全部可见 GPU | 不询问使用哪些卡 |
@@ -102,7 +101,7 @@
 1. **docker run 命令最终确认** — 不可逆操作，需用户确认参数
 2. **容器网络不通且需要代理配置** — 自动检测网络后才问
 3. **搜索 3 轮仍未达标** — 需要用户决定是否继续
-4. **精度评测是否执行** — 仅步骤④（Native 精度）询问用户，quick 模式下可跳过；步骤⑦（FlagGems 精度）**强制执行不询问**
+4. **精度评测是否执行** — 仅步骤④（V1 精度）询问用户，quick 模式下可跳过；步骤⑦（V2 精度）**强制执行不询问**
 
 ---
 
@@ -135,28 +134,28 @@ bash skills/flagos-container-preparation/tools/setup_workspace.sh $CONTAINER
 ```
 /data/flagos-workspace/<model>/          ← 挂载到容器 /flagos-workspace
 ├── results/                              # 最终交付物
-│   ├── native_performance.json
-│   ├── flagos_full.json
-│   ├── flagos_optimized.json             # 仅不达标时产出
+│   ├── native_performance.json              # V1 性能
+│   ├── flagos_full.json                     # V2 性能
+│   ├── flagos_optimized.json                # V3 性能（仅不达标时产出）
 │   ├── ops_list.json
-│   ├── performance_compare.csv           # 首次对比
-│   ├── performance_compare_final.csv     # 最终三版对比
-│   ├── gpqa_native.json                  # GPQA Diamond Native 精度
-│   ├── gpqa_flagos.json                  # GPQA Diamond FlagGems 精度
-│   └── eval_result.json                  # 远端评测结果
+│   ├── performance_compare.csv              # 首次对比
+│   ├── performance_compare_final.csv        # 最终三版对比
+│   ├── gpqa_native.json                     # V1 精度 (GPQA Diamond)
+│   ├── gpqa_flagos.json                     # V2 精度 (GPQA Diamond)
+│   └── eval_result.json                     # 远端评测结果
 │
 ├── traces/                               # 每步留痕（JSON）
 │   ├── 01_container_preparation.json
 │   ├── 02_environment_inspection.json
 │   ├── 03_service_startup_default.json
-│   ├── 04_eval_native.json               # 可选
-│   ├── 05_perf_native.json
+│   ├── 04_eval_v1.json                  # V1 精度（可选）
+│   ├── 05_perf_v1.json
 │   ├── 06_service_startup_flagos.json
-│   ├── 07_eval_full_flagos.json
-│   ├── 08_perf_full_flagos.json
+│   ├── 07_eval_v2.json
+│   ├── 08_perf_v2.json
 │   ├── 09_performance_compare.json
 │   ├── 10_operator_replacement.json      # 仅不达标时
-│   ├── 11_perf_optimized.json            # 仅不达标时
+│   ├── 11_perf_v3.json                   # 仅不达标时
 │   └── 12_final_report.json
 │
 ├── logs/                                 # 运行日志
@@ -220,14 +219,14 @@ bash skills/flagos-container-preparation/tools/setup_workspace.sh $CONTAINER
 | ①容器准备 | `01_container_preparation.json` | docker run 命令（含完整参数）、setup_workspace 部署结果 |
 | ②环境检测 | `02_environment_inspection.json` | inspect_env.py 命令、关键输出（包版本、FlagGems 控制方式） |
 | ③初始启动 | `03_service_startup_default.json` | 启动命令、env vars、健康检查结果、端口 |
-| ④精度native | `04_eval_native.json` | 评测方式(GPQA Diamond)、命令、精度结果 |
-| ⑤性能native | `05_perf_native.json` | benchmark_runner.py 命令（含 --strategy）、用例列表、峰值吞吐 |
+| ④精度V1 | `04_eval_v1.json` | 评测方式(GPQA Diamond)、命令、精度结果 |
+| ⑤性能V1 | `05_perf_v1.json` | benchmark_runner.py 命令（含 --strategy）、用例列表、峰值吞吐 |
 | ⑥启动flagos | `06_service_startup_flagos.json` | toggle 命令、启动命令、ops_list 记录命令、健康检查 |
-| ⑦精度full | `07_eval_full_flagos.json` | 同④ |
-| ⑧性能full | `08_perf_full_flagos.json` | 同⑤ |
+| ⑦精度V2 | `07_eval_v2.json` | 同④ + V1 vs V2 精度对比结果 |
+| ⑧性能V2 | `08_perf_v2.json` | 同⑤ |
 | ⑨性能对比 | `09_performance_compare.json` | compare 命令、对比结果摘要（达标/不达标）、返回码 |
-| ⑩算子替换 | `10_operator_replacement.json` | 搜索策略、每轮测试命令、禁用算子列表、最终性能比 |
-| ⑪性能optimized | `11_perf_optimized.json` | 同⑤ |
+| ⑩算子替换 | `10_operator_replacement.json` | 搜索策略、每轮测试命令、禁用算子列表、启用算子列表、最终性能比 |
+| ⑪性能V3 | `11_perf_v3.json` | 同⑤ |
 | ⑫最终报告 | `12_final_report.json` | 三版对比命令、最终对比表格、结论 |
 
 ### Trace 写入方式
@@ -258,17 +257,17 @@ TRACE_EOF"
 使用 `python performance_compare.py --format markdown` 生成标准 markdown 表格：
 
 ```
-| Test Case | Concurrency | Native TPS | Optimized TPS | Opt/Nat    | Full TPS   | Full/Nat   |
-| --------- | ----------- | ---------- | ------------- | ---------- | ---------- | ---------- |
-| 1k→1k     | 256         | 17328      | 16800         | **97.0%**  | 17511      | **101.1%** |
+| Test Case | Concurrency | V1 TPS | V3 TPS | V3/V1      | V2 TPS     | V2/V1      |
+| --------- | ----------- | ------ | ------ | ---------- | ---------- | ---------- |
+| 1k→1k     | 256         | 17328  | 16800  | **97.0%**  | 17511      | **101.1%** |
 ```
 
 格式规则：
 - TPS 列使用 Total token throughput（input + output）
 - Test Case 使用简写 `1k→1k` 而非 `1k_input_1k_output`
 - Ratio 列加粗显示
-- 三版列：Native / Optimized FlagGems / Full FlagGems
-- 当 Optimized = Full（全量已达标）时，Optimized 列显示 "= Full"
+- 三版列：V1 (Native) / V3 (Optimized FlagGems) / V2 (Full FlagGems)
+- 当 V3 = V2（全量已达标）时，V3 列显示 "= V2"
 
 ---
 
@@ -290,23 +289,24 @@ GPU: <gpu_count>x <gpu_type>
 容器: <container_name>
 
 算子状态:
-  全量算子: XX 个
-  最终启用: XX 个
+  全量算子 (V2): XX 个
+  最终启用 (V3): XX 个
   剔除算子: <op1>, <op2>, ...
   剔除原因:
-    - <op1>: 精度评测报错 (CUDA error)
-    - <op2>: 性能拖慢 (禁用后 +XX%)
+    精度问题: <op1> (CUDA error), <op2> (精度偏差 >5%)
+    性能问题: <op3> (禁用后 +XX%)
 
 精度评测:
-  GPQA Diamond: XX.X% (Native) / XX.X% (FlagGems)
+  GPQA Diamond: XX.X% (V1) / XX.X% (V2)
+  V1 vs V2 偏差: X.XX% (阈值 5%)
   状态: 通过 / 有问题
 
 性能对比:
-| Test Case | Conc | Native TPS | Optimized TPS | Opt/Nat   | Full TPS | Full/Nat  |
-| --------- | ---- | ---------- | ------------- | --------- | -------- | --------- |
-| 1k→1k     | 256  | XXXXX      | XXXXX         | **XX.X%** | XXXXX    | **XX.X%** |
+| Test Case | Conc | V1 TPS | V3 TPS | V3/V1     | V2 TPS | V2/V1     |
+| --------- | ---- | ------ | ------ | --------- | ------ | --------- |
+| 1k→1k     | 256  | XXXXX  | XXXXX  | **XX.X%** | XXXXX  | **XX.X%** |
 
-结论: FlagOS Optimized 达标(≥80%) / 不达标
+结论: V3 (Optimized) 达标(≥80%) / 不达标
 ========================================
 ```
 
@@ -321,12 +321,14 @@ GPU: <gpu_count>x <gpu_type>
 5. **每个 Skill 完成后必须写入对应的 trace JSON**，记录实际执行的命令、参数和关键输出
 6. **禁止添加 SKILL.md 未记录的 vLLM/sglang 启动参数**（如 `--enforce-eager`、`--disable-log-stats` 等），遇到启动问题应分析日志找根因，而非猜测参数绕过
 7. **精度评测和性能测试严禁同时进行**。必须等一个完全结束后再启动另一个。并发执行会互相抢占 GPU 资源，导致两边结果都不可信。启动前必须检查是否有正在运行的评测/测试进程
+8. **性能达标判定粒度：每个用例的每个并发级别**。不是只看平均值或最佳并发，而是 `performance_compare.py` 中所有 ratio 的最小值 ≥ 80% 才算达标。包括 quick 模式也遵循此规则
 8. **算子列表以 `flaggems_enable_oplist.txt` 为唯一权威来源**。每次服务启动后必须检查该文件（默认 `/tmp/flaggems_enable_oplist.txt`）：
    - **文件存在且有内容** → FlagGems 实际在运行，以此文件内容作为当前生效的算子列表
    - **文件不存在或为空** → FlagGems 未启用，不依赖任何缓存的算子列表
    - 每次 FlagGems 重新启动都会**重新生成**此文件，内容反映 blacklist 等配置生效后的实际结果
    - 如果启动模式为 native 但文件残留 → 是上次 flagos 的旧数据，不可作为当前算子列表
    - 所有后续操作（算子替换、搜索、性能对比、报告生成）中的"当前算子列表"均以此文件为准
+9. **容器内 Python 必须用 conda 环境**。所有 `docker exec` 中的 python3/pip 命令必须加 `PATH=/opt/conda/bin:$PATH` 前缀，禁止依赖容器默认 `/usr/bin/python3`（系统 Python 缺少 torch/requests/yaml 等包）
 
 ---
 

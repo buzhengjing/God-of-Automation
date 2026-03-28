@@ -59,22 +59,22 @@
         ↓                     → env_report.md + flag_gems_detection.md
 ③ service-startup (default)   以当前环境原样启动，验证初始环境可用
         ↓
-④ eval-comprehensive (native)   精度评测（GPQA Diamond，询问用户）
-⑤ performance-testing (native)  Native 性能基线
-⑥ service-startup (flagos)      启用全量 FlagGems
-⑦ eval-comprehensive (full)     精度评测（GPQA Diamond，强制执行）+ 算子报错自动处理
-⑧ performance-testing (full)    Full FlagGems 性能
-⑨ [自动] 性能对比               full_flagos/native ≥ 80%?
-   ├── 是 → Optimized = Full，跳到 ⑫
+④ eval-comprehensive (V1)     V1 精度评测（GPQA Diamond，询问用户）
+⑤ performance-testing (V1)    V1 性能基线
+⑥ service-startup (flagos)    启用全量 FlagGems
+⑦ eval-comprehensive (V2)     V2 精度评测 + V1 vs V2 精度对比（5% 阈值）+ 算子报错自动处理
+⑧ performance-testing (V2)    V2 Full FlagGems 性能
+⑨ [自动] 性能对比             V2/V1 ≥ 80%?
+   ├── 是 → V3 = V2，跳到 ⑫
    └── 否 → ⑩ operator-replacement（分组二分搜索）
-⑪ performance-testing (optimized) Optimized FlagGems 性能
+⑪ performance-testing (V3)    V3 Optimized FlagGems 性能
 ⑫ 三版性能对比 + 生成最终报告
 ```
 
 **三版结果文件**：
-- `native_performance.json` — Native（无 FlagGems）
-- `flagos_full.json` — Full FlagGems（全量算子）
-- `flagos_optimized.json` — Optimized FlagGems（≥80% 组合）
+- `native_performance.json` — V1 (Native，无 FlagGems)
+- `flagos_full.json` — V2 (Full FlagGems，全量算子)
+- `flagos_optimized.json` — V3 (Optimized FlagGems，≥80% 组合)
 
 **自动化**：步骤④~⑫大部分无需人工干预。仅在以下情况询问用户：
 - docker run 命令最终确认
@@ -96,7 +96,7 @@
 │         ↓                                                           │
 │  ③ service-startup          启动服务（支持 native/flagos 模式切换）    │
 │         ↓                                                           │
-│  ④ eval-comprehensive         精度评测（GPQA Diamond）                   │
+│  ④ eval-comprehensive         精度评测（本地 GPQA + 远端 flageval + 精度对比） │
 │         ↓                                                           │
 │  ⑤ performance-testing      性能测试（并发搜索+早停+自动对比）         │
 │                                                                     │
@@ -152,17 +152,19 @@
 
 ---
 
-### ④ flagos-eval-comprehensive (精度评测 — GPQA Diamond)
+### ④ flagos-eval-comprehensive (统一精度评测)
 
 | 属性 | 说明 |
 |------|------|
-| **功能** | GPQA Diamond 快速精度评测，自动适配 thinking/non-thinking 模型，自动探测并发 |
+| **功能** | 统一精度评测入口：本地快速评测（GPQA Diamond）+ 远端 flageval 正式评测 + V1 vs V2 精度对比（5% 阈值）+ 算子排查闭环 |
 | **依赖** | `flagos-service-startup` |
-| **触发词** | `精度评测`, `GPQA`, `fast gpqa`, `comprehensive eval` |
+| **触发词** | `精度评测`, `GPQA`, `fast gpqa`, `comprehensive eval`, `远端评测`, `FlagRelease`, `flageval` |
 
-主入口 `fast_gpqa.py`，一条命令跑完 198 题。迁移流程步骤④⑦使用本 Skill。
-
-远端 FlagRelease 评测使用 `flagos-eval-correctness`（独立 Skill）。
+四个模块：
+- **模块 A**：本地快速评测（fast_gpqa.py，GPQA Diamond 198 题）
+- **模块 B**：远端 flageval 正式评测（6 个数据集，原 eval-correctness 功能）
+- **模块 C**：V1 vs V2 精度对比（5% 阈值判定）
+- **模块 D**：错误处理与算子排查（报错 → 算子替换 → 重启 → 重评）
 
 ---
 
@@ -170,7 +172,7 @@
 
 | 属性 | 说明 |
 |------|------|
-| **功能** | 三版性能测试（Native/Full FlagGems/Optimized），并发自动搜索+早停、自动优化触发 |
+| **功能** | 三版性能测试（V1 Native / V2 Full FlagGems / V3 Optimized），并发自动搜索+早停、自动优化触发 |
 | **依赖** | `flagos-service-startup` |
 | **触发词** | `性能测试`, `benchmark`, `vllm bench`, `吞吐量测试` |
 
@@ -270,10 +272,10 @@
 └──────────────────────────────┘
 
 独立工具:
-┌──────────────────────┐  ┌──────────────────┐
-│ eval-correctness     │  │ log-analyzer     │
-│ (远端 FlagRelease)   │  │ + 失败恢复指引    │
-└──────────────────────┘  └──────────────────┘
+┌──────────────────┐
+│ log-analyzer     │
+│ + 失败恢复指引    │
+└──────────────────┘
 ```
 
 ---
