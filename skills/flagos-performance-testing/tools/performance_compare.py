@@ -154,6 +154,7 @@ def compare_results(benchmarks: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any
             }
 
             native_output_tp = 0.0
+            native_total_tp = 0.0
 
             for bm_name in benchmarks:
                 conc_data = bm_conc_data.get(bm_name, {})
@@ -163,24 +164,41 @@ def compare_results(benchmarks: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any
                     row[f"{bm_name}_total_throughput"] = total_tp
                     if bm_name == "native":
                         native_output_tp = output_tp
+                        native_total_tp = total_tp
                 else:
                     row[f"{bm_name}_output_throughput"] = None
                     row[f"{bm_name}_total_throughput"] = None
 
-            # 计算 ratio
-            if native_output_tp and native_output_tp > 0:
-                for bm_name in benchmarks:
-                    if bm_name == "native":
-                        continue
-                    flagos_tp = row.get(f"{bm_name}_output_throughput")
-                    if flagos_tp is not None:
-                        row[f"{bm_name}_ratio"] = flagos_tp / native_output_tp
-                    else:
-                        row[f"{bm_name}_ratio"] = None
-            else:
-                for bm_name in benchmarks:
-                    if bm_name != "native":
-                        row[f"{bm_name}_ratio"] = None
+            # 计算 ratio（output 和 total 分别计算，取较小值作为综合 ratio）
+            for bm_name in benchmarks:
+                if bm_name == "native":
+                    continue
+                flagos_output_tp = row.get(f"{bm_name}_output_throughput")
+                flagos_total_tp = row.get(f"{bm_name}_total_throughput")
+
+                if native_output_tp > 0 and flagos_output_tp is not None:
+                    output_ratio = flagos_output_tp / native_output_tp
+                    row[f"{bm_name}_output_ratio"] = output_ratio
+                else:
+                    row[f"{bm_name}_output_ratio"] = None
+
+                if native_total_tp > 0 and flagos_total_tp is not None:
+                    total_ratio = flagos_total_tp / native_total_tp
+                    row[f"{bm_name}_total_ratio"] = total_ratio
+                else:
+                    row[f"{bm_name}_total_ratio"] = None
+
+                # 综合 ratio = min(output_ratio, total_ratio)，兼容下游消费
+                or_val = row[f"{bm_name}_output_ratio"]
+                tr_val = row[f"{bm_name}_total_ratio"]
+                if or_val is not None and tr_val is not None:
+                    row[f"{bm_name}_ratio"] = min(or_val, tr_val)
+                elif or_val is not None:
+                    row[f"{bm_name}_ratio"] = or_val
+                elif tr_val is not None:
+                    row[f"{bm_name}_ratio"] = tr_val
+                else:
+                    row[f"{bm_name}_ratio"] = None
 
             rows.append(row)
 
@@ -189,15 +207,20 @@ def compare_results(benchmarks: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any
 
 def check_target(rows: List[Dict[str, Any]], benchmark_names: List[str],
                  target_ratio: float = 0.8) -> Dict[str, bool]:
-    """检查各 flagos 版本是否达标（所有有 ratio 的并发级别都必须达标）"""
+    """检查各 flagos 版本是否达标（所有并发级别的 output_ratio 和 total_ratio 都必须达标）"""
     result = {}
     for name in benchmark_names:
         if name == "native":
             continue
-        ratios = [row[f"{name}_ratio"] for row in rows
-                  if row.get(f"{name}_ratio") is not None]
-        if ratios:
-            min_ratio = min(ratios)
+        # 收集 output_ratio 和 total_ratio，综合判定
+        all_ratios = []
+        for row in rows:
+            for metric in ("output_ratio", "total_ratio"):
+                val = row.get(f"{name}_{metric}")
+                if val is not None:
+                    all_ratios.append(val)
+        if all_ratios:
+            min_ratio = min(all_ratios)
             result[name] = min_ratio >= target_ratio
         else:
             result[name] = False
@@ -274,11 +297,15 @@ def print_markdown_table(rows: List[Dict[str, Any]], benchmark_names: List[str])
     for name in benchmark_names:
         if name == "native":
             continue
-        ratios = [row[f"{name}_ratio"] for row in rows
-                  if row.get(f"{name}_ratio") is not None]
-        if ratios:
-            avg_ratio = sum(ratios) / len(ratios)
-            min_ratio = min(ratios)
+        all_ratios = []
+        for row in rows:
+            for metric in ("output_ratio", "total_ratio"):
+                val = row.get(f"{name}_{metric}")
+                if val is not None:
+                    all_ratios.append(val)
+        if all_ratios:
+            avg_ratio = sum(all_ratios) / len(all_ratios)
+            min_ratio = min(all_ratios)
             status = "PASS" if min_ratio >= 0.8 else "FAIL"
             dn = display_names.get(name, name)
             print(f"{dn}: avg_ratio={avg_ratio*100:.1f}%, min_ratio={min_ratio*100:.1f}% [{status}]")
@@ -337,11 +364,15 @@ def print_comparison(rows: List[Dict[str, Any]], benchmark_names: List[str]):
     for name in benchmark_names:
         if name == "native":
             continue
-        ratios = [row[f"{name}_ratio"] for row in rows
-                  if row.get(f"{name}_ratio") is not None]
-        if ratios:
-            avg_ratio = sum(ratios) / len(ratios)
-            min_ratio = min(ratios)
+        all_ratios = []
+        for row in rows:
+            for metric in ("output_ratio", "total_ratio"):
+                val = row.get(f"{name}_{metric}")
+                if val is not None:
+                    all_ratios.append(val)
+        if all_ratios:
+            avg_ratio = sum(all_ratios) / len(all_ratios)
+            min_ratio = min(all_ratios)
             status = "PASS" if min_ratio >= 0.8 else "FAIL"
             print(f"{name}: avg_ratio={avg_ratio*100:.1f}%, min_ratio={min_ratio*100:.1f}% [{status}]")
 
@@ -358,6 +389,8 @@ def save_csv(rows: List[Dict[str, Any]], output_path: str, benchmark_names: List
         headers.append(f"{name}_output_throughput")
         headers.append(f"{name}_total_throughput")
         if name != "native":
+            headers.append(f"{name}_output_ratio")
+            headers.append(f"{name}_total_ratio")
             headers.append(f"{name}_ratio")
 
     p = Path(output_path)

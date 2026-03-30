@@ -331,27 +331,21 @@ def run_benchmark_quick(perf_config: str, benchmark_script: str,
         # 兼容新旧格式：旧格式有 results 包装，新格式直接是扁平结构
         results = data.get("results", data) if isinstance(data, dict) else data
 
-        # 提取吞吐量：从每个 test case 的并发结果中找最大 output throughput
+        # 提取吞吐量：每个 test_case × 每个 concurrency 的 output + total 双指标
         throughputs = {}
         for tc_name, tc_results in results.items():
             if not isinstance(tc_results, dict):
                 continue
-            # 新格式：无 _search_meta，直接遍历并发结果取最大值
-            # 旧格式兼容：如果有 _search_meta 则优先使用
-            meta = tc_results.get("_search_meta", {})
-            best_tp = meta.get("best_throughput", 0)
-            if best_tp > 0:
-                throughputs[tc_name] = best_tp
-                continue
-            # 新格式：从并发结果中提取最优
             for key, metrics in tc_results.items():
                 if key.startswith("_") or not isinstance(metrics, dict) or "error" in metrics:
                     continue
-                tp = metrics.get('Output token throughput (tok/s)', 0) or 0
-                if tp > best_tp:
-                    best_tp = tp
-            if best_tp > 0:
-                throughputs[tc_name] = best_tp
+                output_tp = metrics.get('Output token throughput (tok/s)', 0) or 0
+                total_tp = metrics.get('Total token throughput (tok/s)', 0) or 0
+                if output_tp > 0 or total_tp > 0:
+                    throughputs[f"{tc_name}|{key}"] = {
+                        "output": output_tp,
+                        "total": total_tp,
+                    }
 
         return {"success": True, "throughputs": throughputs, "results": results}
     except Exception as e:
@@ -416,13 +410,20 @@ def preflight_framework_check(service_startup_cmd: str,
         return {"pass": False, "ratio": 0, "throughput": 0,
                 "message": f"ERROR: 框架预检 benchmark 失败: {bench.get('error', '?')}"}
 
-    # 取最大吞吐量与 native 对比
+    # 取最大 output 吞吐量与 native 对比（preflight 只做粗略判断）
     throughputs = bench.get("throughputs", {})
     if not throughputs:
         return {"pass": False, "ratio": 0, "throughput": 0,
                 "message": "ERROR: 框架预检无有效吞吐量数据"}
 
-    max_tp = max(throughputs.values())
+    # 兼容新格式 {"case|conc": {"output": x, "total": y}} 和旧格式 {"case": float}
+    output_vals = []
+    for v in throughputs.values():
+        if isinstance(v, dict):
+            output_vals.append(v.get("output", 0) or 0)
+        else:
+            output_vals.append(v)
+    max_tp = max(output_vals) if output_vals else 0
     ratio = max_tp / native_throughput if native_throughput > 0 else 0
 
     result = {

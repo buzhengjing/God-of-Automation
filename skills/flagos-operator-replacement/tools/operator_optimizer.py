@@ -275,6 +275,35 @@ def filter_runtime_ops(all_ops: List[str], runtime_ops: List[str]) -> List[str]:
 # 初始化
 # =============================================================================
 
+def _extract_native_throughputs(benchmark_path: str) -> Dict[str, Dict[str, float]]:
+    """
+    从 native benchmark JSON 提取每个 test_case × concurrency 的 output + total 双指标。
+
+    返回: {"case|conc": {"output": x, "total": y}, ...}
+    """
+    with open(benchmark_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    # 兼容新旧格式
+    results = data.get("results", data) if isinstance(data, dict) else data
+
+    throughputs = {}
+    for tc_name, tc_results in results.items():
+        if not isinstance(tc_results, dict):
+            continue
+        for key, metrics in tc_results.items():
+            if key.startswith("_") or not isinstance(metrics, dict) or "error" in metrics:
+                continue
+            output_tp = metrics.get('Output token throughput (tok/s)', 0) or 0
+            total_tp = metrics.get('Total token throughput (tok/s)', 0) or 0
+            if output_tp > 0 or total_tp > 0:
+                throughputs[f"{tc_name}|{key}"] = {
+                    "output": output_tp,
+                    "total": total_tp,
+                }
+    return throughputs
+
+
 def init_optimization(ops_file: str, native_throughput: float,
                       target_ratio: float = 0.8,
                       runtime_ops_file: Optional[str] = None,
@@ -283,6 +312,7 @@ def init_optimization(ops_file: str, native_throughput: float,
                       oot_ops: Optional[List[str]] = None,
                       reverse: bool = False,
                       search_strategy: str = "progressive",
+                      native_benchmark: Optional[str] = None,
                       state_path: Optional[str] = None) -> Dict[str, Any]:
     """
     初始化优化状态。
@@ -297,6 +327,7 @@ def init_optimization(ops_file: str, native_throughput: float,
         oot_ops: 自定义 OOT 算子列表（默认使用 OOT_OPERATORS）
         reverse: 反向搜索（从全禁用逐步启用），适合大量注册算子但少量运行时调用的场景
         search_strategy: 搜索策略 "progressive"（先验预筛+渐进排除）| "group"（分组二分）| "linear"
+        native_benchmark: native benchmark JSON 文件路径（可选，用于提取双指标基线）
     """
     with open(ops_file, "r", encoding="utf-8") as f:
         ops_data = json.load(f)
@@ -400,6 +431,7 @@ def init_optimization(ops_file: str, native_throughput: float,
         "enabled_ops": init_enabled,
         "disabled_ops": init_disabled,
         "native_throughput": native_throughput,
+        "native_throughputs": _extract_native_throughputs(native_benchmark) if native_benchmark else {},
         "target_ratio": target_ratio,
         "current_ratio": 0.0,
         "search_log": [],
@@ -930,11 +962,37 @@ def _compute_final_lists(state: Dict[str, Any], search_disabled: List[str]):
         state["flagos_whitelist"] = []
 
 
-def compute_min_ratio(throughputs: Dict[str, float], native_throughput: float) -> float:
-    """计算多并发级别中的最小 ratio"""
+def compute_min_ratio(throughputs: Dict[str, Any], native_throughput: float = 0,
+                      native_throughputs: Optional[Dict[str, Any]] = None) -> float:
+    """
+    计算所有 test_case × concurrency × {output, total} 的最小 ratio。
+
+    throughputs 格式:
+      新格式: {"case|conc": {"output": x, "total": y}, ...}
+      旧格式兼容: {"case": float}  (仅 output，用 native_throughput 单值对比)
+    native_throughputs: 同格式的 native 基线（新格式时必须提供）
+    """
     if not throughputs:
         return 0.0
-    ratios = [t / native_throughput for t in throughputs.values() if native_throughput > 0]
+
+    ratios = []
+    for key, val in throughputs.items():
+        if isinstance(val, dict):
+            # 新格式: {"output": x, "total": y}
+            native_val = (native_throughputs or {}).get(key, {})
+            if isinstance(native_val, (int, float)):
+                # 兼容: native 还是旧格式单值
+                native_val = {"output": native_val, "total": native_val}
+            for metric in ("output", "total"):
+                tp = val.get(metric, 0) or 0
+                native_tp = native_val.get(metric, 0) if isinstance(native_val, dict) else 0
+                if native_tp > 0 and tp > 0:
+                    ratios.append(tp / native_tp)
+        else:
+            # 旧格式兼容: 单一 float 值
+            if native_throughput > 0 and val > 0:
+                ratios.append(val / native_throughput)
+
     return min(ratios) if ratios else 0.0
 
 
@@ -947,18 +1005,27 @@ def update_result(op_name: str, throughput: Optional[float] = None,
 
     支持两种输入方式：
     1. 单一吞吐量: --throughput + --native-throughput
-    2. 多并发吞吐量: --throughputs '{"1":800,"64":900}' + --native-throughput
-       判定使用所有并发级别的最小 ratio
+    2. 多并发吞吐量: --throughputs '{"case|conc": {"output": x, "total": y}, ...}'
+       判定使用所有 test_case × concurrency × {output, total} 的最小 ratio
+       兼容旧格式: --throughputs '{"case": float}' + --native-throughput
     """
     state = load_state(state_path)
     native_tp = native_throughput or state.get("native_throughput", 0)
+    native_tps = state.get("native_throughputs")  # 新格式 native 基线
     target_ratio = state["target_ratio"]
 
     # 计算 ratio
     if throughputs:
         tp_dict = json.loads(throughputs) if isinstance(throughputs, str) else throughputs
-        ratio = compute_min_ratio(tp_dict, native_tp)
-        throughput_val = min(tp_dict.values()) if tp_dict else 0
+        ratio = compute_min_ratio(tp_dict, native_tp, native_tps)
+        # throughput_val: 取最小的 output throughput 用于日志显示
+        min_vals = []
+        for v in tp_dict.values():
+            if isinstance(v, dict):
+                min_vals.append(v.get("output", 0) or 0)
+            else:
+                min_vals.append(v)
+        throughput_val = min(min_vals) if min_vals else 0
     elif throughput is not None:
         ratio = throughput / native_tp if native_tp > 0 else 0
         throughput_val = throughput
@@ -1420,6 +1487,7 @@ def main():
     init_parser.add_argument("--reverse", action="store_true", help="反向搜索（从全禁用逐步启用，适合大量算子注册干扰 dispatch 的场景）")
     init_parser.add_argument("--search-strategy", choices=["progressive", "group", "linear"],
                              default="progressive", help="搜索策略: progressive(先验预筛+渐进排除) | group(分组二分) | linear(线性)")
+    init_parser.add_argument("--native-benchmark", help="native benchmark JSON 文件路径（用于提取双指标基线）")
     init_parser.add_argument("--state-path", help="状态文件路径")
 
     # next 子命令
@@ -1465,6 +1533,7 @@ def main():
             oot_ops=oot_ops_list,
             reverse=args.reverse,
             search_strategy=args.search_strategy,
+            native_benchmark=args.native_benchmark,
             state_path=args.state_path,
         )
 

@@ -263,9 +263,11 @@ else:
 
 ## 10. 性能判定
 
-- **目标**：每个用例的每个并发级别均 ≥ 80% of Native
-- **计算**：`min(throughput[concurrency] / native_throughput for all concurrencies)`
-- **OOT 判定**：禁用后性能提升 > 2% → 加入 OOT blacklist
+- **目标**：每个用例的每个并发级别下，`Output token throughput` 和 `Total token throughput` 两个指标分别计算 gems/native 比值，所有比值均 ≥ 80% 才算达标
+- **数据格式**：`{"test_case|concurrency": {"output": x, "total": y}, ...}`
+- **计算**：`min(output_ratio, total_ratio for all test_cases × all concurrencies)`
+- **native 基线**：初始化时通过 `--native-benchmark` 从 V1 benchmark JSON 提取同格式的双指标基线，存入 `state["native_throughputs"]`
+- **OOT 判定**：禁用后性能提升 > 2% → 加入 OOT blacklist（仍用粗略的 output 单指标判断）
 
 ---
 
@@ -275,8 +277,10 @@ else:
 ┌─────────────────────────────────────────────────────────┐
 │ 1. 初始化 (init)                                         │
 │    输入: ops.json + runtime_ops.json + native_throughput  │
+│         + native_benchmark.json (双指标基线)               │
 │    → all_ops, search_ops, 分组, 风险分级                   │
 │    → _supports_whitelist() → use_whitelist                │
+│    → _extract_native_throughputs() → native_throughputs   │
 │    → 输出: operator_config.json (初始状态)                 │
 └──────────────────────┬──────────────────────────────────┘
                        ▼
