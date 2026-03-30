@@ -256,7 +256,8 @@ TRACE_EOF"
 3. 用户提供代理后，设置环境变量重试：
    - 容器内：`docker exec -e http_proxy=xxx -e https_proxy=xxx`
    - pip：额外支持 `-i 镜像源` 如用户提供
-4. 将代理配置写入 context.yaml `network` 字段，后续操作自动复用，不再重复询问
+4. 将代理配置写入 context.yaml `network` 字段，后续网络下载操作自动复用，不再重复询问
+5. **下载完成后立即关闭代理**（`unset http_proxy https_proxy no_proxy`），避免代理影响后续本地服务访问（如 localhost API 调用）
 
 **禁止行为**：
 - 不要在网络失败后反复重试同一操作
