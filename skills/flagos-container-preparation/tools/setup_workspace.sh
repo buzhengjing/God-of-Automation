@@ -162,6 +162,14 @@ for shared_mod in env_utils.py ops_constants.py; do
     fi
 done
 
+# GPU 统一检测
+if [ -f "${PROJECT_ROOT}/shared/detect_gpu.py" ]; then
+    docker cp "${PROJECT_ROOT}/shared/detect_gpu.py" \
+        "${CONTAINER}:/flagos-workspace/scripts/detect_gpu.py"
+    SCRIPTS_COPIED=$((SCRIPTS_COPIED + 1))
+    echo "  ✓ detect_gpu.py (shared)"
+fi
+
 echo "  共复制 ${SCRIPTS_COPIED} 个脚本"
 
 # 2.5. 确保 context.yaml 存在

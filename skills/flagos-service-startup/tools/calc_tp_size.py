@@ -17,6 +17,7 @@ import math
 import os
 import re
 import sys
+from pathlib import Path
 
 # 权重文件后缀
 WEIGHT_EXTENSIONS = (".safetensors", ".bin")
@@ -50,66 +51,25 @@ def get_model_weight_size_gb(model_path):
 def get_gpu_info():
     """获取 GPU 数量和单卡显存（GB）
 
-    优先使用 torch.cuda，fallback 到 nvidia-smi / 其他厂商工具。
+    优先读取已有检测结果（环境检测阶段生成），fallback 到实时检测。
     """
-    # 尝试 torch
-    try:
-        import torch
-        if torch.cuda.is_available():
-            count = torch.cuda.device_count()
-            if count > 0:
-                props = torch.cuda.get_device_properties(0)
-                mem_bytes = getattr(props, 'total_memory', None) or getattr(props, 'total_mem', 0)
-                name = torch.cuda.get_device_name(0)
-                return {
-                    "count": count,
-                    "memory_gb": round(mem_bytes / (1024 ** 3), 1),
-                    "name": name,
-                    "source": "torch.cuda",
-                }
-    except (ImportError, Exception):
-        pass
+    # 优先读已有检测结果
+    for path in ["/flagos-workspace/results/gpu_info.json", "gpu_info.json"]:
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    info = json.load(f)
+                if info.get("count") and info.get("count") > 0:
+                    return info
+            except (json.JSONDecodeError, Exception):
+                pass
 
-    # 尝试 torch_npu（华为昇腾）
+    # fallback: 实时检测
     try:
-        import torch
-        import torch_npu  # noqa: F401
-        if hasattr(torch, "npu") and torch.npu.is_available():
-            count = torch.npu.device_count()
-            if count > 0:
-                mem_bytes = torch.npu.get_device_properties(0).total_memory
-                name = torch.npu.get_device_name(0)
-                return {
-                    "count": count,
-                    "memory_gb": round(mem_bytes / (1024 ** 3), 1),
-                    "name": name,
-                    "source": "torch.npu",
-                }
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from detect_gpu import detect_gpu
+        return detect_gpu()
     except (ImportError, Exception):
-        pass
-
-    # fallback: nvidia-smi
-    try:
-        import subprocess
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=count,memory.total,name",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode == 0:
-            lines = [l.strip() for l in result.stdout.strip().split("\n") if l.strip()]
-            if lines:
-                # 每行: "count, memory_mb, name" — 实际 nvidia-smi 每卡一行
-                first = lines[0].split(",")
-                mem_mb = float(first[1].strip())
-                name = first[2].strip() if len(first) > 2 else "unknown"
-                return {
-                    "count": len(lines),
-                    "memory_gb": round(mem_mb / 1024, 1),
-                    "name": name,
-                    "source": "nvidia-smi",
-                }
-    except (FileNotFoundError, Exception):
         pass
 
     return None
