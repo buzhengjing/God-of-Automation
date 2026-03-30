@@ -8,7 +8,7 @@ vLLM 性能基准测试工具 (重构版)
 - --output-name: 指定输出文件名
 - --output-dir: 指定输出目录
 - --mode: 标记测试模式 (native/flagos_initial/flagos_optimized)
-- per-test-case timeout: 从配置文件中读取 timeout 字段
+- per-test-case 预热: 消除冷启动开销
 - 所有档统一 num_prompts=concurrency
 
 向后兼容别名:
@@ -53,8 +53,8 @@ import yaml
 
 DEFAULT_CONFIG_PATH = Path(__file__).parent / "config" / "perf_config.yaml"
 
-# 默认超时（秒）
-DEFAULT_TIMEOUT = 600
+# 超时已禁用（设为 None），benchmark 将等待子进程自然结束
+DEFAULT_TIMEOUT = None
 
 
 def load_yaml(path: Path) -> Dict[str, Any]:
@@ -189,7 +189,7 @@ def build_command(config: Dict[str, Any], test_case: Dict[str, Any]) -> List[str
 
 
 def run_benchmark(cmd: List[str], num_prompts: int, max_concurrency: Optional[int] = None,
-                  dry_run: bool = False, timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
+                  dry_run: bool = False) -> Dict[str, Any]:
     """执行单次基准测试"""
     full_cmd = cmd + ["--num-prompts", str(num_prompts)]
     if max_concurrency:
@@ -200,7 +200,7 @@ def run_benchmark(cmd: List[str], num_prompts: int, max_concurrency: Optional[in
         return {"dry_run": True}
 
     conc_str = f"concurrency={max_concurrency}" if max_concurrency else "unlimited"
-    print(f"  Running: num_prompts={num_prompts}, {conc_str}, timeout={timeout}s")
+    print(f"  Running: num_prompts={num_prompts}, {conc_str}")
 
     try:
         proc = subprocess.Popen(
@@ -218,16 +218,11 @@ def run_benchmark(cmd: List[str], num_prompts: int, max_concurrency: Optional[in
         t.start()
 
         # 实时逐行读取 stdout
-        start_time = time.time()
         for line in proc.stdout:
             stdout_lines.append(line)
             stripped = line.strip()
             if stripped:
                 print(f"    | {stripped}")
-            if time.time() - start_time > timeout:
-                proc.kill()
-                print(f"    TIMEOUT (>{timeout}s)")
-                return {"error": f"timeout after {timeout}s"}
 
         proc.wait()
         t.join(timeout=5)
@@ -250,9 +245,6 @@ def run_benchmark(cmd: List[str], num_prompts: int, max_concurrency: Optional[in
         return {"error": str(e)}
 
 
-def get_test_case_timeout(test_case: Dict[str, Any]) -> int:
-    """获取测试用例的超时时间，支持从配置中读取"""
-    return test_case.get("timeout", DEFAULT_TIMEOUT)
 
 
 # Quick 模式最大并发
@@ -271,39 +263,37 @@ def run_test_case(config: Dict[str, Any], test_case: Dict[str, Any],
                   final_burst: bool = False) -> Dict[str, Any]:
     """运行单个测试用例的所有并发级别"""
     base_cmd = build_command(config, test_case)
-    timeout = get_test_case_timeout(test_case)
 
     levels = config["concurrency"]["levels"]
     final_prompts = config["concurrency"]["final_num_prompts"]
     use_early_stop = test_case.get("early_stop", True)
 
     if strategy == "quick":
-        results = run_quick_test(base_cmd, levels, dry_run, timeout)
+        results = run_quick_test(base_cmd, levels, dry_run)
     elif strategy == "fixed":
         # fixed: 只跑 fixed_concurrency 指定的单个并发级别
         fixed_conc = test_case.get("fixed_concurrency")
         if fixed_conc is None:
             raise ValueError(f"Test case {test_case['name']} missing fixed_concurrency for --strategy fixed")
-        results = run_single_concurrency(base_cmd, fixed_conc, dry_run, timeout)
+        results = run_single_concurrency(base_cmd, fixed_conc, dry_run)
     elif strategy == "comprehensive":
         # comprehensive: 所有并发全跑，强制不早停
-        results = run_concurrency_search(base_cmd, levels, dry_run, timeout,
+        results = run_concurrency_search(base_cmd, levels, dry_run,
                                          early_stop=False)
     else:
         # fast (default): 按 early_stop 配置决定是否早停
-        results = run_concurrency_search(base_cmd, levels, dry_run, timeout,
+        results = run_concurrency_search(base_cmd, levels, dry_run,
                                          early_stop=use_early_stop)
 
     # --final-burst opt-in: 任何 strategy 完成后追加 final burst
     if final_burst:
-        results = run_final_burst(base_cmd, final_prompts, results, dry_run, timeout)
+        results = run_final_burst(base_cmd, final_prompts, results, dry_run)
 
     return results
 
 
 def run_concurrency_search(base_cmd: List[str], levels: List[int],
                            dry_run: bool = False,
-                           timeout: int = DEFAULT_TIMEOUT,
                            early_stop: bool = True) -> Dict[str, Any]:
     """
     自动搜索最优并发级别。
@@ -332,7 +322,7 @@ def run_concurrency_search(base_cmd: List[str], levels: List[int],
 
     for conc in levels:
         # num_prompts = concurrency，所有档统一
-        metrics = run_benchmark(base_cmd, conc, conc, dry_run, timeout)
+        metrics = run_benchmark(base_cmd, conc, conc, dry_run)
         results[str(conc)] = metrics
 
         if dry_run or "error" in metrics:
@@ -393,8 +383,7 @@ def run_concurrency_search(base_cmd: List[str], levels: List[int],
 
 
 def run_quick_test(base_cmd: List[str], levels: List[int],
-                   dry_run: bool = False,
-                   timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
+                   dry_run: bool = False) -> Dict[str, Any]:
     """
     快速模式：num_prompts = concurrency，并发最高到 256，不早停。
 
@@ -407,7 +396,7 @@ def run_quick_test(base_cmd: List[str], levels: List[int],
     # 预热：发少量请求让 GPU/vLLM 完成初始化，结果丢弃
     if not dry_run:
         print(f"  [WARMUP] Sending {WARMUP_NUM_PROMPTS} warmup requests (concurrency={WARMUP_CONCURRENCY}) ...")
-        run_benchmark(base_cmd, WARMUP_NUM_PROMPTS, WARMUP_CONCURRENCY, dry_run=False, timeout=timeout)
+        run_benchmark(base_cmd, WARMUP_NUM_PROMPTS, WARMUP_CONCURRENCY, dry_run=False)
         print(f"  [WARMUP] Done, starting benchmark")
 
     results = {}
@@ -417,7 +406,7 @@ def run_quick_test(base_cmd: List[str], levels: List[int],
     print(f"  [QUICK MODE] levels={levels}, num_prompts=concurrency, max_conc={QUICK_MAX_CONCURRENCY}")
 
     for conc in levels:
-        metrics = run_benchmark(base_cmd, conc, conc, dry_run, timeout)
+        metrics = run_benchmark(base_cmd, conc, conc, dry_run)
         results[str(conc)] = metrics
 
         if dry_run or "error" in metrics:
@@ -440,15 +429,14 @@ def run_quick_test(base_cmd: List[str], levels: List[int],
 
 
 def run_single_concurrency(base_cmd: List[str], concurrency: int,
-                           dry_run: bool = False,
-                           timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
+                           dry_run: bool = False) -> Dict[str, Any]:
     """
     Fixed 模式：只跑单个固定并发级别。
 
     用于 --strategy fixed，跳过搜索，直接测试指定并发。
     """
     print(f"  [FIXED MODE] concurrency={concurrency}")
-    metrics = run_benchmark(base_cmd, concurrency, concurrency, dry_run, timeout)
+    metrics = run_benchmark(base_cmd, concurrency, concurrency, dry_run)
     results = {str(concurrency): metrics}
 
     throughput = metrics.get('Output token throughput (tok/s)', 0) or 0
@@ -464,8 +452,7 @@ def run_single_concurrency(base_cmd: List[str], concurrency: int,
 
 
 def run_final_burst(base_cmd: List[str], final_num_prompts: int,
-                    results: Dict[str, Any], dry_run: bool = False,
-                    timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
+                    results: Dict[str, Any], dry_run: bool = False) -> Dict[str, Any]:
     """
     Final burst: 无限制并发的大规模测试。
 
@@ -473,7 +460,7 @@ def run_final_burst(base_cmd: List[str], final_num_prompts: int,
     num_prompts=final_num_prompts (默认 1000), max_concurrency=None。
     """
     print(f"  [FINAL BURST] num_prompts={final_num_prompts}, unlimited concurrency")
-    results["max"] = run_benchmark(base_cmd, final_num_prompts, None, dry_run, timeout)
+    results["max"] = run_benchmark(base_cmd, final_num_prompts, None, dry_run)
     return results
 
 
@@ -676,8 +663,7 @@ def main():
     all_results = {}
     for tc in test_matrix:
         print(f"\n{'='*50}")
-        tc_timeout = get_test_case_timeout(tc)
-        print(f"测试用例: {tc['name']} (input={tc['input_len']}, output={tc['output_len']}, timeout={tc_timeout}s)")
+        print(f"测试用例: {tc['name']} (input={tc['input_len']}, output={tc['output_len']})")
         print('='*50)
         all_results[tc["name"]] = run_test_case(
             config, tc, args.dry_run,
