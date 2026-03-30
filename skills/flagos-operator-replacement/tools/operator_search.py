@@ -473,6 +473,8 @@ def run_search_step(state_path: str, perf_config: str,
                     apply_config_script: str = DEFAULT_APPLY_CONFIG_SCRIPT) -> Dict[str, Any]:
     """执行单轮搜索步骤"""
 
+    step_timing = {}
+
     # 1. 获取下一步操作
     print("\n" + "=" * 60)
     print(f"[搜索步骤] {datetime.now().strftime('%H:%M:%S')}")
@@ -488,6 +490,7 @@ def run_search_step(state_path: str, perf_config: str,
     print(f"\n操作: {action.get('message', action_type)}")
 
     # 2. 应用算子配置
+    t0 = time.time()
     config_result = apply_operator_config(
         action,
         apply_config_script=apply_config_script,
@@ -495,6 +498,7 @@ def run_search_step(state_path: str, perf_config: str,
         capabilities=capabilities,
         gems_txt_path=gems_txt_path,
     )
+    step_timing["config_seconds"] = round(time.time() - t0, 1)
     # plugin 模式返回 env_inline 字符串或 None，非 plugin 返回 True/False
     if plugin_mode:
         env_inline = config_result if isinstance(config_result, str) else None
@@ -506,9 +510,11 @@ def run_search_step(state_path: str, perf_config: str,
         env_inline = None
 
     # 3. 重启服务
+    t0 = time.time()
     if not restart_service(SERVICE_STOP_CMD, service_startup_cmd, wait_script,
                            env_inline=env_inline):
         return {"action": "error", "message": "服务重启失败"}
+    step_timing["restart_seconds"] = round(time.time() - t0, 1)
 
     # 3.5. 重启后验证算子变化
     runtime_ops = verify_ops_via_txt()
@@ -519,8 +525,10 @@ def run_search_step(state_path: str, perf_config: str,
             print(f"  [验证] 警告: {len(unexpected)} 个应禁用的算子仍在运行时 txt 中: {unexpected[:5]}")
 
     # 4. 运行 benchmark
+    t0 = time.time()
     bench_result = run_benchmark_quick(perf_config, benchmark_script,
                                        f"search_step_{action.get('step', 0)}")
+    step_timing["benchmark_seconds"] = round(time.time() - t0, 1)
 
     if not bench_result.get("success"):
         return {"action": "error", "message": f"Benchmark 失败: {bench_result.get('error', '?')}"}
@@ -537,7 +545,10 @@ def run_search_step(state_path: str, perf_config: str,
     )
 
     print(f"\n[步骤完成] decision={update.get('decision', '?')}, "
-          f"ratio={update.get('ratio', 0)*100:.1f}%")
+          f"ratio={update.get('ratio', 0)*100:.1f}%"
+          f" (config={step_timing['config_seconds']}s"
+          f" restart={step_timing['restart_seconds']}s"
+          f" bench={step_timing['benchmark_seconds']}s)")
 
     return {
         "action": action_type,
@@ -546,6 +557,7 @@ def run_search_step(state_path: str, perf_config: str,
         "decision": update.get("decision", "?"),
         "ratio": update.get("ratio", 0),
         "status": update.get("status", "?"),
+        "timing": step_timing,
     }
 
 
@@ -576,6 +588,7 @@ def run_full_search(state_path: str, perf_config: str,
     search_log = []
     start_time = time.time()
     framework_check = None
+    preflight_elapsed = 0
 
     # Plugin 模式：搜索前验证框架开销
     if plugin_mode:
@@ -586,15 +599,18 @@ def run_full_search(state_path: str, perf_config: str,
             native_tp = 0
 
         if native_tp > 0:
+            t_pf = time.time()
             framework_check = preflight_framework_check(
                 service_startup_cmd, perf_config, native_tp,
                 wait_script=kwargs.get("wait_script", DEFAULT_WAIT_SCRIPT),
                 benchmark_script=kwargs.get("benchmark_script", DEFAULT_BENCHMARK_SCRIPT),
             )
+            preflight_elapsed = round(time.time() - t_pf, 1)
             if not framework_check.get("pass") and framework_check.get("ratio", 1.0) < 0.80:
                 print("\nERROR: 框架本身性能 <80%，建议先排查 plugin 问题")
                 print("搜索仍将继续，但结果可能不可靠\n")
 
+    search_start = time.time()
     for round_num in range(1, max_rounds + 1):
         print(f"\n{'=' * 60}")
         print(f"第 {round_num}/{max_rounds} 轮")
@@ -614,7 +630,13 @@ def run_full_search(state_path: str, perf_config: str,
             break
 
     elapsed = time.time() - start_time
+    search_elapsed = round(time.time() - search_start, 1)
     total_rounds = len(search_log)
+
+    # 汇总子阶段累计耗时
+    benchmark_total = sum(r.get("timing", {}).get("benchmark_seconds", 0) for r in search_log)
+    restart_total = sum(r.get("timing", {}).get("restart_seconds", 0) for r in search_log)
+    config_total = sum(r.get("timing", {}).get("config_seconds", 0) for r in search_log)
 
     # 最终状态
     try:
@@ -633,6 +655,15 @@ def run_full_search(state_path: str, perf_config: str,
         "disabled_list": state.get("disabled_ops", []),
         "framework_check": framework_check,
         "search_log": search_log,
+        "timing": {
+            "total_seconds": round(elapsed),
+            "preflight_seconds": preflight_elapsed,
+            "search_seconds": search_elapsed,
+            "rounds": total_rounds,
+            "benchmark_total_seconds": round(benchmark_total, 1),
+            "restart_total_seconds": round(restart_total, 1),
+            "config_total_seconds": round(config_total, 1),
+        },
     }
 
     print(f"\n{'#' * 60}")

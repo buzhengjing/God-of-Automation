@@ -105,6 +105,8 @@ def submit_evaluation(params_file: str, platform: str = DEFAULT_PLATFORM,
     print(f"[提交评测] domain={domain}, platform={platform}")
     print(f"  eval_model: {params.get('eval_infos', [{}])[0].get('eval_model', '?')}")
 
+    monitor_start = time.time()
+
     # 提交
     url = f"{platform}/evaluation"
     resp = api_request(url, method="POST", data=params)
@@ -116,24 +118,35 @@ def submit_evaluation(params_file: str, platform: str = DEFAULT_PLATFORM,
     request_id = resp.get("request_id", "")
     print(f"[提交成功] request_id: {request_id}")
 
+    submit_time = datetime.now().isoformat()
+
     # 保存 request_id
     result = {
         "request_id": request_id,
         "domain": domain,
-        "submit_time": datetime.now().isoformat(),
+        "submit_time": submit_time,
         "status": "submitted",
         "eval_tasks": resp.get("eval_tasks", []),
     }
 
     # 自动轮询
+    poll_count = 0
     if auto_poll and request_id:
         poll_result = poll_progress(request_id, domain, platform)
         result.update(poll_result)
+        poll_count = poll_result.get("poll_count", 0)
 
         # 如果已完成，获取结果
         if result.get("finished"):
             eval_result = get_result(request_id, platform)
             result["eval_results"] = eval_result.get("eval_results", {})
+
+    result["timing"] = {
+        "total_seconds": round(time.time() - monitor_start),
+        "submit_time": submit_time,
+        "finish_time": datetime.now().isoformat(),
+        "poll_count": poll_count,
+    }
 
     return result
 
@@ -176,7 +189,7 @@ def poll_progress(request_id: str, domain: str = "NLP",
             if network_failures >= MAX_NETWORK_FAILURES:
                 print(f"\n[停止轮询] 连续 {MAX_NETWORK_FAILURES} 次网络失败")
                 return {"finished": False, "status": "network_error",
-                        "request_id": request_id}
+                        "request_id": request_id, "poll_count": i}
             time.sleep(interval)
             continue
 
@@ -201,7 +214,8 @@ def poll_progress(request_id: str, domain: str = "NLP",
 
         if finished:
             print(f"\n[评测完成] status={status}")
-            return {"finished": True, "status": status, "request_id": request_id}
+            return {"finished": True, "status": status, "request_id": request_id,
+                    "poll_count": i}
 
         # 自适应：进度 > 80% 时切换到密集轮询，快速感知完成
         actual_interval = interval
@@ -219,7 +233,7 @@ def poll_progress(request_id: str, domain: str = "NLP",
 
     print(f"\n[超出轮询上限] {MAX_POLLS} 次未完成，请稍后手动查询")
     return {"finished": False, "status": "polling_timeout",
-            "request_id": request_id}
+            "request_id": request_id, "poll_count": MAX_POLLS}
 
 
 # =============================================================================

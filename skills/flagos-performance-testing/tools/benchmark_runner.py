@@ -41,6 +41,7 @@ import argparse
 import json
 import re
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -261,7 +262,8 @@ QUICK_TEST_CASE_NAME = "4k_input_1k_output"
 def run_test_case(config: Dict[str, Any], test_case: Dict[str, Any],
                   dry_run: bool = False, strategy: str = "fast",
                   final_burst: bool = False) -> Dict[str, Any]:
-    """运行单个测试用例的所有并发级别"""
+    """运行单个测试用例的所有并发级别，返回结果中包含 _elapsed_seconds"""
+    tc_start = time.time()
     base_cmd = build_command(config, test_case)
 
     levels = config["concurrency"]["levels"]
@@ -289,6 +291,7 @@ def run_test_case(config: Dict[str, Any], test_case: Dict[str, Any],
     if final_burst:
         results = run_final_burst(base_cmd, final_prompts, results, dry_run)
 
+    results["_elapsed_seconds"] = round(time.time() - tc_start, 1)
     return results
 
 
@@ -471,7 +474,8 @@ def run_final_burst(base_cmd: List[str], final_num_prompts: int,
 def save_results(results: Dict[str, Any], config: Dict[str, Any],
                  output_name: Optional[str] = None,
                  output_dir: Optional[str] = None,
-                 mode: Optional[str] = None) -> str:
+                 mode: Optional[str] = None,
+                 timing: Optional[Dict[str, Any]] = None) -> str:
     """保存测试结果到 JSON 文件（扁平格式，不含 metadata 包装和 _search_meta）"""
     output_cfg = config.get("output", {})
 
@@ -496,6 +500,9 @@ def save_results(results: Dict[str, Any], config: Dict[str, Any],
             data[tc_name] = tc_results
             continue
         data[tc_name] = {k: v for k, v in tc_results.items() if not k.startswith("_")}
+
+    if timing:
+        data["_timing"] = timing
 
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
@@ -661,6 +668,8 @@ def main():
 
     # 执行测试
     all_results = {}
+    tc_timings = {}
+    total_start = time.time()
     for tc in test_matrix:
         print(f"\n{'='*50}")
         print(f"测试用例: {tc['name']} (input={tc['input_len']}, output={tc['output_len']})")
@@ -669,6 +678,8 @@ def main():
             config, tc, args.dry_run,
             strategy=strategy, final_burst=args.final_burst
         )
+        tc_timings[tc["name"]] = all_results[tc["name"]].get("_elapsed_seconds", 0)
+    total_elapsed = round(time.time() - total_start, 1)
 
     # 打印摘要
     if not args.dry_run:
@@ -676,13 +687,20 @@ def main():
 
     # 保存结果
     if not args.dry_run:
+        timing = {
+            "total_seconds": total_elapsed,
+            "per_test_case": tc_timings,
+            "timestamp_start": datetime.fromtimestamp(total_start).isoformat(),
+            "timestamp_end": datetime.now().isoformat(),
+        }
         output_path = save_results(
             all_results, config,
             output_name=args.output_name,
             output_dir=args.output_dir,
-            mode=args.mode
+            mode=args.mode,
+            timing=timing,
         )
-        print(f"\n结果已保存: {output_path}")
+        print(f"\n结果已保存: {output_path} (耗时 {total_elapsed}s)")
 
     return all_results
 

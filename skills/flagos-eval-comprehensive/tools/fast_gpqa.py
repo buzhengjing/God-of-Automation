@@ -542,6 +542,7 @@ def run_fast_gpqa(
         'truncation_detected': truncation_detected,
         'temperature': gen_config['temperature'],
         'probe_time_seconds': probe_time,
+        'eval_duration_seconds': round(total_elapsed - probe_time, 2),
         'total_duration_seconds': total_elapsed,
         'timestamp': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
         'work_dir': work_dir,
