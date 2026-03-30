@@ -38,10 +38,14 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# 共享模块导入（容器内所有脚本在同一 scripts/ 目录）
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # =============================================================================
 # 配置
@@ -287,22 +291,16 @@ def restart_service(stop_cmd: str, startup_cmd: str,
 def verify_ops_via_txt() -> Optional[List[str]]:
     """重启后读取运行时 txt 文件验证算子变化"""
     try:
-        # 导入 find_ops_list_file（假设 operator_optimizer.py 在同一目录）
-        import importlib.util
-        optimizer_path = Path(DEFAULT_OPTIMIZER_SCRIPT)
-        if optimizer_path.exists():
-            spec = importlib.util.spec_from_file_location("operator_optimizer", str(optimizer_path))
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            result = mod.find_ops_list_file()
-            if result.get("found"):
-                ops = result["ops"]
-                print(f"  [验证] 运行时 txt: {result['path']} ({len(ops)} 个算子)")
-                return ops
-            else:
-                print(f"  [验证] 未找到运行时 txt 文件")
+        from operator_optimizer import find_ops_list_file
+        result = find_ops_list_file()
+        if result.get("found"):
+            ops = result["ops"]
+            print(f"  [验证] 运行时 txt: {result['path']} ({len(ops)} 个算子)")
+            return ops
         else:
-            print(f"  [验证] optimizer 脚本不存在: {optimizer_path}")
+            print(f"  [验证] 未找到运行时 txt 文件")
+    except ImportError:
+        print(f"  [验证] operator_optimizer 模块不可用")
     except Exception as e:
         print(f"  [验证] 读取 txt 失败: {e}")
     return None
@@ -531,7 +529,7 @@ def run_search_step(state_path: str, perf_config: str,
     native_tp = state.get("native_throughput", 0)
     throughputs = bench_result.get("throughputs", {})
 
-    op_name = action.get("group", action.get("op", "unknown"))
+    op_name = action.get("group", action.get("round", action.get("op", "unknown")))
     update = update_optimizer_result(
         state_path, optimizer_script,
         op_name, throughputs, native_tp
@@ -559,6 +557,7 @@ def run_full_search(state_path: str, perf_config: str,
                     **kwargs) -> Dict[str, Any]:
     """运行完整搜索循环"""
     # 读取搜索方向
+    _state = {}
     try:
         _state = load_json(state_path)
         search_direction = _state.get("search_direction", "forward")
@@ -568,7 +567,8 @@ def run_full_search(state_path: str, perf_config: str,
     print(f"\n{'#' * 60}")
     print(f"# 算子搜索开始 (最多 {max_rounds} 轮)")
     if plugin_mode:
-        print(f"# 模式: Plugin (OOT → group 两阶段)")
+        _search_mode = _state.get("search_mode", "progressive")
+        print(f"# 模式: Plugin (OOT → {_search_mode} 两阶段)")
     print(f"# 搜索方向: {search_direction}")
     print(f"{'#' * 60}\n")
 

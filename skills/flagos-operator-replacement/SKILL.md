@@ -1,6 +1,6 @@
 ---
 name: flagos-operator-replacement
-description: 算子替换与优化工具，支持被动排除（评测报错）和主动两阶段搜索优化（OOT→group），适配 plugin 环境变量控制和非 plugin Layer 1-4 分层降级，算子列表自动发现，全自动搜索编排，反向二分搜索 + 框架验证 + 排序校验
+description: 算子替换与优化工具，支持被动排除（评测报错）和主动两阶段搜索优化（OOT→渐进排除），适配 plugin 环境变量控制和非 plugin Layer 1-4 分层降级，算子列表自动发现，全自动搜索编排，反向二分搜索 + 框架验证 + 排序校验
 version: 6.0.0
 license: internal
 triggers:
@@ -31,10 +31,10 @@ provides:
 独立工具，可在任何阶段按需调用。支持两种模式：
 
 1. **被动排除模式**：根据评测报错信息排除问题算子（沿用 Layer 1-4 分层降级）
-2. **主动优化模式**：两阶段搜索（OOT → group 分组二分），使 FlagOS 性能 ≥ 目标比率
+2. **主动优化模式**：两阶段搜索（OOT → 渐进排除），使 FlagOS 性能 ≥ 目标比率
 
 **工具脚本**（已由 setup_workspace.sh 部署到容器）:
-- `operator_optimizer.py` — 算子优化器（OOT 搜索 + 分组二分搜索、算子列表自动发现、映射表生成）
+- `operator_optimizer.py` — 算子优化器（OOT 搜索 + 渐进排除搜索、算子列表自动发现、映射表生成）
 - `operator_search.py` — 搜索编排（完整的 next→配置→重启→benchmark→update 自动循环，支持 plugin/非plugin）
 - `apply_op_config.py` — Plugin 场景：生成算子替换环境变量 JSON（内联前缀方式）
 
@@ -143,10 +143,13 @@ USE_FLAGGEMS=0 VLLM_FL_PREFER_ENABLED=false vllm serve ...
 # 全量启用 FlagGems
 USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true vllm serve ...
 
-# 禁用指定的 torch 底层算子
+# 禁用指定的 torch 底层算子（黑名单，FlagGems < 4.2.1rc0）
 USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true VLLM_FL_FLAGOS_BLACKLIST="softmax,layer_norm" vllm serve ...
 
-# 禁用指定的 OOT 高层算子
+# 只启用指定的 torch 底层算子（白名单，FlagGems >= 4.2.1rc0，优先使用）
+USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true VLLM_FL_FLAGOS_WHITELIST="addmm,mm,bmm" vllm serve ...
+
+# 禁用指定的 OOT 高层算子（与白名单/黑名单独立）
 USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true VLLM_FL_OOT_BLACKLIST="fused_moe" vllm serve ...
 
 # 指定单个算子使用 vendor 实现
@@ -160,6 +163,7 @@ USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true VLLM_FL_PER_OP="rms_norm=vendor;atten
 | 场景 | 控制方式 | txt 文件角色 |
 |------|----------|-------------|
 | Plugin | `VLLM_FL_*` 环境变量 | **权威来源**（验证生效 + 读取实际算子列表） |
+| Plugin (白名单) | `VLLM_FL_FLAGOS_WHITELIST`（FlagGems >= 4.2.1rc0 自动启用） | 同上 |
 | 非 plugin (yaml_config) | YAML exclude 配置文件 | **权威来源**（验证生效 + 读取实际算子列表） |
 | 非 plugin (only_enable) | `flag_gems.only_enable(include=[...])` | **权威来源**（验证生效 + 读取实际算子列表） |
 | 非 plugin (enable_unused) | `flag_gems.enable(unused=[...])` | **权威来源**（验证生效 + 读取实际算子列表） |
@@ -345,8 +349,8 @@ ${CMD_PREFIX} python3 /flagos-workspace/scripts/diagnose_ops.py profile \
 ```
 
 **决策逻辑**：
-- 有热点 → 只搜 hotspot 算子，跳过分组二分的大部分轮次
-- 无法采集 profiler → 按 setup_instructions 配置后重试，或 fallback 到分组二分搜索
+- 有热点 → 只搜 hotspot 算子，跳过大部分搜索轮次
+- 无法采集 profiler → 按 setup_instructions 配置后重试，或 fallback 到渐进排除搜索
 
 ## 诊断与搜索的衔接
 
@@ -359,7 +363,7 @@ ${CMD_PREFIX} python3 /flagos-workspace/scripts/diagnose_ops.py profile \
     │       ├── 不达标 → accuracy-groups 分组定位 → 禁用问题组/算子
     │       └── 通过 → 性能测试
     │               ├── 达标 → 完成
-    │               └── 不达标 → profile 预扫描 → 缩小搜索空间 → 分组二分
+    │               └── 不达标 → profile 预扫描 → 缩小搜索空间 → 渐进排除
 ```
 
 ---
@@ -369,7 +373,7 @@ ${CMD_PREFIX} python3 /flagos-workspace/scripts/diagnose_ops.py profile \
 | 触发方式 | 场景 | 模式 |
 |----------|------|------|
 | 评测报错 | eval-comprehensive 发现算子问题 | **被动排除**（Layer 1-4） |
-| 性能不达标 | performance-testing 发现某用例/并发级别 < 80% of V1 | **主动分组二分搜索** |
+| 性能不达标 | performance-testing 发现某用例/并发级别 < 80% of V1 | **主动渐进排除搜索** |
 
 ---
 
@@ -518,16 +522,38 @@ USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true VLLM_FL_OOT_BLACKLIST=fused_moe VLLM_
     if 每个用例每个并发级别 ratio >= 80% → 搜索完成
     else → 进入阶段 2
 
-阶段 2: torch 底层分组二分搜索（沿用现有逻辑，~15 轮）
+阶段 2: 先验预筛 + 渐进排除（默认策略 progressive，最多 3 轮）
+  基于算子功能的先验知识，将算子按性能影响力分为 high/medium/low 三级。
+  逐轮排除，达标即停：
+
+  Round 1: 排除 high 风险算子（matmul/linear/softmax/rms_norm 等 ~8 个）
+           → benchmark → 达标？→ 结束
+           → 不达标？→ Round 2
+
+  Round 2: 追加排除 medium 风险算子（embedding/gelu/silu 等 ~10 个）
+           → benchmark → 达标？→ 结束
+           → 不达标？→ Round 3
+
+  Round 3: 追加排除 low 风险算子（copy_/add/mul 等基础运算）
+           → benchmark → 达标？→ 结束
+           → 不达标？→ 问题不在算子层面，标记失败
+
   Plugin 场景：通过 VLLM_FL_FLAGOS_BLACKLIST 环境变量控制
   非 plugin 场景：通过 Layer 1-4 策略控制
   每轮重启后读取 txt 文件验证算子变化
+
+  备选策略：--search-strategy group（分组二分搜索）或 linear（线性逐个搜索）
 ```
 
 **为什么先搜 OOT 层？**
 - OOT 算子只有 5 个，但每个都是高层融合算子，单个对性能影响巨大
 - 阶段 1 最多 5 轮即可完成
 - 如果性能问题在 OOT 层，无需搜索几十个底层算子
+
+**为什么用渐进排除而非分组二分？**
+- 算子列表通常只有 20-30 个，分组二分轮次过多（最坏 ~22 轮）
+- 渐进排除最多 3 轮即可定位问题所在的风险等级
+- 达标即停，保留尽可能多的算子
 
 ## 工作流程
 
@@ -540,6 +566,9 @@ docker cp skills/flagos-operator-replacement/tools/operator_search.py \
   $CONTAINER:/flagos-workspace/scripts/
 docker cp skills/flagos-operator-replacement/tools/apply_op_config.py \
   $CONTAINER:/flagos-workspace/scripts/
+# 共享模块（上述脚本的依赖）
+docker cp skills/shared/env_utils.py $CONTAINER:/flagos-workspace/scripts/
+docker cp skills/shared/ops_constants.py $CONTAINER:/flagos-workspace/scripts/
 ```
 
 ### 步骤 O2 — 自动发现并导出算子列表
@@ -580,7 +609,7 @@ with open('/flagos-workspace/results/runtime_ops.json', 'w') as f:
 
 ### 步骤 O3 — 初始化优化器
 
-**Plugin 场景（含 OOT 搜索）**：
+**Plugin 场景（含 OOT 搜索 + 渐进排除）**：
 ```bash
 ${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py init \
   --ops-file /flagos-workspace/results/ops_list.json \
@@ -589,12 +618,21 @@ ${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py init \
   --plugin-mode
 ```
 
-**非 Plugin 场景（仅 group 搜索）**：
+**非 Plugin 场景（渐进排除）**：
 ```bash
 ${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py init \
   --ops-file /flagos-workspace/results/ops_list.json \
   --native-throughput <native_perf.output_throughput> \
   --target-ratio 0.8
+```
+
+**备选：使用分组二分搜索**：
+```bash
+${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py init \
+  --ops-file /flagos-workspace/results/ops_list.json \
+  --native-throughput <native_perf.output_throughput> \
+  --target-ratio 0.8 \
+  --search-strategy group
 ```
 
 ### 步骤 O4 — 运行搜索循环
@@ -739,7 +777,7 @@ MetaX C500 + Qwen3-8B：309 个注册算子仅 26 个运行时执行，全量 Fl
 ## 搜索限制
 
 - Plugin 两阶段搜索：OOT ≤5 轮 + group ≤15 轮 ≈ 20 轮
-- 非 plugin 分组二分搜索：预计 15 轮左右完成
+- 非 plugin 渐进排除搜索：预计 3 轮左右完成
 - 线性搜索：遍历搜索范围内所有算子一轮
 - 贪心搜索 3 轮仍未达标时，询问用户是否继续
 - 每轮保存进度，支持断点续搜

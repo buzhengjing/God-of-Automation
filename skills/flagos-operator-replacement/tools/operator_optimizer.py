@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 """
-算子优化器 — 分组二分搜索最优算子集
+算子优化器 — 渐进排除搜索最优算子集
 
-通过分组二分搜索 FlagGems 算子，找到使 FlagOS 性能 >= 目标比率（默认 80% native）的最优算子组合。
+通过渐进排除搜索 FlagGems 算子，找到使 FlagOS 性能 >= 目标比率（默认 80% native）的最优算子组合。
 
-核心算法（分组二分搜索）：
-1. 将算子按功能分为 5 组（compute/memory/math/index/reduce）
-2. 整组禁用 → benchmark → 仍达标 → 整组全禁用，跳过组内搜索
-3. 不达标 → 组内二分定位关键算子
-4. 预计搜索轮次：5 组 × ~3 轮 = ~15 轮（vs 旧版逐个遍历 38 轮）
+核心算法（渐进排除搜索，默认策略 progressive）：
+1. 按性能影响力将算子分为 high/medium/low 三级
+2. 逐轮排除：Round 1 排除 high → Round 2 追加排除 medium → Round 3 追加排除 low
+3. 达标即停，保留尽可能多的算子
+4. 最多 3 轮（vs 旧版分组二分 ~22 轮）
 
-新增功能：
+备选策略：
+- --search-strategy group: 分组二分搜索（按功能分 5 组，组内二分定位）
+- --search-strategy linear: 线性逐个搜索
+
+其他功能：
 - --runtime-ops: 只搜索运行时实际调用的算子
-- --group-search: 分组二分搜索（默认启用）
 - --multi-throughput: 接受多并发级别吞吐量，用最小值判定
 - mapping 子命令: 输出运行时算子名 <-> aten 算子名映射
 
@@ -53,82 +56,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
+# 共享模块导入（兼容本地开发和容器内扁平部署）
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "shared"))
 
-def env_to_inline(env_dict):
-    """将 env dict 转为内联前缀字符串: VAR1=val1 VAR2=val2"""
-    parts = []
-    for k, v in env_dict.items():
-        if " " in v or "'" in v:
-            parts.append(f"{k}='{v}'")
-        else:
-            parts.append(f"{k}={v}")
-    return " ".join(parts)
-
-
-# =============================================================================
-# 算子分组定义
-# =============================================================================
-
-# =============================================================================
-# OOT 高层算子（plugin 场景独立控制）
-# =============================================================================
-
-OOT_OPERATORS = [
-    "silu_and_mul",      # SiLU 激活 + 逐元素乘
-    "rms_norm",          # RMS 归一化
-    "rotary_embedding",  # 旋转位置编码
-    "fused_moe",         # 融合 MoE
-    "attention_backend", # Attention 实现选择
-]
-
-
-OPERATOR_GROUPS = {
-    "compute": [
-        "addmm", "mm", "bmm", "linear", "matmul",
-        "conv2d", "conv_depthwise2d",
-    ],
-    "memory": [
-        "copy_", "zero_", "zeros", "ones", "ones_like", "full", "fill_scalar_",
-        "clone", "to_copy", "empty_like", "new_zeros", "new_ones",
-    ],
-    "math": [
-        "cos", "sin", "pow_scalar", "reciprocal", "exp", "log", "sqrt", "rsqrt",
-        "abs", "neg", "tanh", "sigmoid", "gelu", "silu", "relu",
-        "add", "sub", "mul", "div", "add_scalar", "sub_scalar", "mul_scalar",
-        "div_scalar",
-    ],
-    "index": [
-        "gather", "scatter", "scatter_add_0", "index", "index_select",
-        "embedding", "slice_scatter", "select_scatter",
-    ],
-    "reduce": [
-        "cumsum", "sort", "sort_stable", "argmax", "arange_start",
-        "sum", "mean", "max", "min", "softmax", "log_softmax",
-        "layer_norm", "rms_norm", "group_norm",
-    ],
-}
-
-# 运行时函数名 -> aten 算子名 映射（常见的不一致项）
-RUNTIME_TO_ATEN_MAP = {
-    "arange_start": "arange.start",
-    "arange_start_step": "arange.start_step",
-    "add_scalar": "add.Scalar",
-    "sub_scalar": "sub.Scalar",
-    "mul_scalar": "mul.Scalar",
-    "div_scalar": "div.Scalar",
-    "pow_scalar": "pow.Scalar",
-    "pow_tensor_scalar": "pow.Tensor_Scalar",
-    "fill_scalar_": "fill_.Scalar",
-    "scatter_add_0": "scatter_add",
-    "sort_stable": "sort.stable",
-    "to_copy": "_to_copy",
-    "conv_depthwise2d": "_conv_depthwise2d",
-    "new_zeros": "new_zeros",
-    "new_ones": "new_ones",
-}
-
-# aten 算子名 -> 运行时函数名 反向映射
-ATEN_TO_RUNTIME_MAP = {v: k for k, v in RUNTIME_TO_ATEN_MAP.items()}
+from env_utils import env_to_inline
+from ops_constants import (
+    OOT_OPERATORS, OPERATOR_GROUPS,
+    RUNTIME_TO_ATEN_MAP, ATEN_TO_RUNTIME_MAP,
+    OP_RISK_LEVELS,
+)
 
 
 # =============================================================================
@@ -345,6 +282,7 @@ def init_optimization(ops_file: str, native_throughput: float,
                       plugin_mode: bool = False,
                       oot_ops: Optional[List[str]] = None,
                       reverse: bool = False,
+                      search_strategy: str = "progressive",
                       state_path: Optional[str] = None) -> Dict[str, Any]:
     """
     初始化优化状态。
@@ -354,10 +292,11 @@ def init_optimization(ops_file: str, native_throughput: float,
         native_throughput: 原生性能基线吞吐量 (tok/s)
         target_ratio: 性能目标比率
         runtime_ops_file: 运行时实际调用的算子列表 JSON（可选）
-        group_search: 启用分组二分搜索（默认 True）
+        group_search: 启用分组二分搜索（仅 group 策略使用）
         plugin_mode: 是否为 plugin 场景（使用环境变量控制）
         oot_ops: 自定义 OOT 算子列表（默认使用 OOT_OPERATORS）
         reverse: 反向搜索（从全禁用逐步启用），适合大量注册算子但少量运行时调用的场景
+        search_strategy: 搜索策略 "progressive"（先验预筛+渐进排除）| "group"（分组二分）| "linear"
     """
     with open(ops_file, "r", encoding="utf-8") as f:
         ops_data = json.load(f)
@@ -386,10 +325,10 @@ def init_optimization(ops_file: str, native_throughput: float,
         search_ops = filter_runtime_ops(all_ops, runtime_list)
         print(f"运行时算子过滤: {len(all_ops)} 全量 -> {len(search_ops)} 运行时")
 
-    # 分组信息
+    # 分组信息（group 和 progressive 策略都需要）
     groups = classify_ops(search_ops)
     group_state = {}
-    if group_search:
+    if search_strategy == "group" and group_search:
         group_order = ["compute", "memory", "math", "index", "reduce", "other"]
         group_state = {
             "group_order": [g for g in group_order if g in groups],
@@ -399,10 +338,44 @@ def init_optimization(ops_file: str, native_throughput: float,
             "group_results": {},  # group_name -> "all_disabled" | "binary_searched"
         }
 
+    # Progressive 策略：先验预筛 + 渐进排除
+    progressive_state = {}
+    if search_strategy == "progressive":
+        # 将搜索范围内的算子按风险分级
+        risk_high = set(OP_RISK_LEVELS.get("high", []))
+        risk_medium = set(OP_RISK_LEVELS.get("medium", []))
+        risk_low = set(OP_RISK_LEVELS.get("low", []))
+        search_set = set(search_ops)
+
+        excluded_high = sorted(search_set & risk_high)
+        excluded_medium = sorted(search_set & risk_medium)
+        excluded_low = sorted(search_set - risk_high - risk_medium - risk_low)  # 未知算子归 medium
+        excluded_low_known = sorted(search_set & risk_low)
+
+        progressive_state = {
+            "phase": "round_test",  # round_test | done
+            "current_round": 0,     # 0=high, 1=medium, 2=low
+            "rounds": ["high", "medium", "low"],
+            "excluded_by_round": {
+                "high": excluded_high,
+                "medium": excluded_medium + excluded_low,  # 未知算子与 medium 一起排除
+                "low": excluded_low_known,
+            },
+            "cumulative_excluded": [],  # 当前累积排除的算子
+        }
+
+    # 确定 search_mode
+    if search_strategy == "progressive":
+        search_mode = "progressive"
+    elif search_strategy == "group" and group_search:
+        search_mode = "group"
+    else:
+        search_mode = "linear"
+
     # Plugin 场景：OOT 搜索阶段
     effective_oot_ops = oot_ops if oot_ops else list(OOT_OPERATORS)
     oot_state = {}
-    search_phase = "group"  # 默认直接进入 group 搜索
+    search_phase = search_mode  # 默认直接进入对应搜索模式
 
     if plugin_mode:
         search_phase = "oot"  # plugin 场景先搜索 OOT 层
@@ -431,14 +404,17 @@ def init_optimization(ops_file: str, native_throughput: float,
         "current_ratio": 0.0,
         "search_log": [],
         "status": "in_progress",
-        "search_mode": "group" if group_search else "linear",
+        "search_mode": search_mode,
         "search_direction": "reverse" if reverse else "forward",
-        "search_phase": search_phase,  # oot -> group -> done
+        "search_phase": search_phase,  # oot -> progressive/group -> done
         "plugin_mode": plugin_mode,
         "oot_state": oot_state,
         "oot_blacklist": [],
         "flagos_blacklist": [],
+        "flagos_whitelist": [],
+        "use_whitelist": _supports_whitelist(),
         "group_state": group_state,
+        "progressive_state": progressive_state,
         "groups": groups,
         "current_step": 0,
         "current_op": "",
@@ -447,13 +423,24 @@ def init_optimization(ops_file: str, native_throughput: float,
 
     save_state(state, state_path)
 
-    print(f"优化已初始化: {len(all_ops)} 个算子, 搜索范围 {len(search_ops)} 个")
+    mode_labels = {
+        "progressive": "先验预筛+渐进排除",
+        "group": "分组二分",
+        "linear": "线性",
+    }
     direction_label = "反向（全禁用→逐步启用）" if reverse else "正向（全启用→逐步禁用）"
-    print(f"搜索模式: {'分组二分' if group_search else '线性'}, 方向: {direction_label}")
+    print(f"优化已初始化: {len(all_ops)} 个算子, 搜索范围 {len(search_ops)} 个")
+    print(f"搜索模式: {mode_labels.get(search_mode, search_mode)}, 方向: {direction_label}")
+    print(f"算子控制: {'白名单 (WHITELIST)' if state['use_whitelist'] else '黑名单 (BLACKLIST)'}")
     if plugin_mode:
         print(f"Plugin 模式: OOT 算子 {len(effective_oot_ops)} 个 ({', '.join(effective_oot_ops)})")
-        print(f"搜索阶段: OOT -> group -> done")
-    if group_search:
+        print(f"搜索阶段: OOT -> {search_mode} -> done")
+    if search_mode == "progressive":
+        ps = progressive_state
+        for rnd in ps["rounds"]:
+            ops = ps["excluded_by_round"].get(rnd, [])
+            print(f"  {rnd} 风险: {len(ops)} 个算子 ({', '.join(ops[:5])}{'...' if len(ops) > 5 else ''})")
+    elif search_mode == "group":
         for gname, gops in groups.items():
             print(f"  {gname}: {len(gops)} 个算子 ({', '.join(gops[:5])}{'...' if len(gops) > 5 else ''})")
     print(f"原生吞吐量: {native_throughput:.2f} tok/s")
@@ -496,9 +483,12 @@ def get_next_action_oot(state: Dict[str, Any], state_path: Optional[str] = None)
                 "message": f"OOT 累积验证: 禁用 {len(oot_blacklist)} 个 OOT 算子 ({', '.join(oot_blacklist)})",
             }
         else:
-            # 无需禁用任何 OOT 算子，直接进入 group 阶段
-            state["search_phase"] = "group"
+            # 无需禁用任何 OOT 算子，直接进入下一阶段
+            search_mode = state.get("search_mode", "group")
+            state["search_phase"] = search_mode
             save_state(state, state_path)
+            if search_mode == "progressive":
+                return get_next_action_progressive(state, state_path)
             return get_next_action_group(state, state_path)
 
     current_op = oot_ops[idx]
@@ -541,6 +531,7 @@ def get_next_action_group(state: Dict[str, Any], state_path: Optional[str] = Non
     if gs["phase"] == "done" or gs["current_group_idx"] >= len(gs["group_order"]):
         state["status"] = "completed"
         state["completed_at"] = datetime.now().isoformat()
+        _compute_final_lists(state, state.get("disabled_ops", []))
         save_state(state, state_path)
         return {"action": "completed", "message": "所有组搜索完成"}
 
@@ -623,6 +614,7 @@ def get_next_action_group_reverse(state: Dict[str, Any],
     if gs["phase"] == "done" or gs["current_group_idx"] >= len(gs["group_order"]):
         state["status"] = "completed"
         state["completed_at"] = datetime.now().isoformat()
+        _compute_final_lists(state, state.get("disabled_ops", []))
         save_state(state, state_path)
         return {"action": "completed", "message": "反向搜索完成：所有组已测试"}
 
@@ -689,6 +681,117 @@ def get_next_action_group_reverse(state: Dict[str, Any],
     return {"action": "error", "message": f"未知阶段: {gs['phase']}"}
 
 
+# =============================================================================
+# 先验预筛 + 渐进排除（progressive 策略）
+# =============================================================================
+
+def get_next_action_progressive(state: Dict[str, Any],
+                                 state_path: Optional[str] = None) -> Dict[str, Any]:
+    """渐进排除：按风险等级逐轮排除，达标即停"""
+    ps = state.get("progressive_state", {})
+    if not ps or ps.get("phase") == "done":
+        state["status"] = "completed"
+        state["completed_at"] = datetime.now().isoformat()
+        _compute_final_lists(state, state.get("disabled_ops", []))
+        save_state(state, state_path)
+        return {"action": "completed", "message": "渐进排除搜索完成"}
+
+    current_round = ps.get("current_round", 0)
+    rounds = ps.get("rounds", ["high", "medium", "low"])
+
+    if current_round >= len(rounds):
+        # 所有轮次都不达标
+        state["status"] = "failed"
+        state["completed_at"] = datetime.now().isoformat()
+        save_state(state, state_path)
+        return {"action": "failed", "message": "所有风险等级均已排除仍不达标，问题可能不在算子层面"}
+
+    round_name = rounds[current_round]
+    round_ops = ps["excluded_by_round"].get(round_name, [])
+
+    # 累积排除：当前轮的排除 = 之前所有轮的排除 + 本轮
+    prev_excluded = list(ps.get("cumulative_excluded", []))
+    new_excluded = sorted(set(prev_excluded + round_ops))
+
+    # 计算本轮的 enabled/disabled
+    all_search = set(state.get("search_ops", state["all_ops"]))
+    test_disabled = sorted(set(state.get("disabled_ops", [])) | set(new_excluded))
+    test_enabled = sorted(all_search - set(new_excluded))
+
+    state["current_step"] += 1
+    save_state(state, state_path)
+
+    return {
+        "action": "test_progressive_round",
+        "round": round_name,
+        "round_index": current_round,
+        "excluded_this_round": round_ops,
+        "cumulative_excluded": new_excluded,
+        "step": state["current_step"],
+        "test_enabled_ops": test_enabled,
+        "test_disabled_ops": test_disabled,
+        "message": (
+            f"渐进排除 Round {current_round + 1}/{len(rounds)}: "
+            f"排除 {round_name} 风险算子 {len(round_ops)} 个 "
+            f"(累计排除 {len(new_excluded)} 个, 保留 {len(test_enabled)} 个)"
+        ),
+    }
+
+
+def _update_progressive_result(state: Dict[str, Any], op_name: str,
+                                ratio: float, target_ratio: float,
+                                log_entry: Dict[str, Any]):
+    """处理渐进排除的结果更新：达标即停"""
+    ps = state["progressive_state"]
+    current_round = ps.get("current_round", 0)
+    rounds = ps.get("rounds", ["high", "medium", "low"])
+    round_name = rounds[current_round] if current_round < len(rounds) else "?"
+
+    round_ops = ps["excluded_by_round"].get(round_name, [])
+    prev_excluded = list(ps.get("cumulative_excluded", []))
+    new_excluded = sorted(set(prev_excluded + round_ops))
+
+    if ratio >= target_ratio:
+        # 达标 → 结束
+        log_entry["decision"] = "progressive_pass"
+        log_entry["reason"] = (
+            f"Round {current_round + 1} ({round_name}) 达标: "
+            f"ratio {ratio*100:.1f}% >= {target_ratio*100:.0f}%"
+        )
+        ps["cumulative_excluded"] = new_excluded
+        ps["phase"] = "done"
+        state["status"] = "completed"
+        state["completed_at"] = datetime.now().isoformat()
+
+        # 更新 enabled/disabled
+        all_search = set(state.get("search_ops", state["all_ops"]))
+        state["disabled_ops"] = sorted(set(state.get("disabled_ops", [])) | set(new_excluded))
+        state["enabled_ops"] = sorted(all_search - set(new_excluded))
+        _compute_final_lists(state, new_excluded)
+
+        print(f"  [Progressive Round {current_round + 1}] 达标 {ratio*100:.1f}% — 搜索完成")
+        print(f"  排除 {len(new_excluded)} 个算子, 保留 {len(state['enabled_ops'])} 个")
+    else:
+        # 不达标 → 进入下一轮
+        log_entry["decision"] = "progressive_next"
+        log_entry["reason"] = (
+            f"Round {current_round + 1} ({round_name}) 未达标: "
+            f"ratio {ratio*100:.1f}% < {target_ratio*100:.0f}%, 进入下一轮"
+        )
+        ps["cumulative_excluded"] = new_excluded
+        ps["current_round"] = current_round + 1
+
+        if current_round + 1 >= len(rounds):
+            state["status"] = "failed"
+            state["completed_at"] = datetime.now().isoformat()
+            print(f"  [Progressive] 所有轮次均不达标 — 搜索失败")
+        else:
+            next_round = rounds[current_round + 1]
+            next_ops = ps["excluded_by_round"].get(next_round, [])
+            print(f"  [Progressive Round {current_round + 1}] 未达标 {ratio*100:.1f}% — "
+                  f"进入 Round {current_round + 2} ({next_round}, +{len(next_ops)} 个算子)")
+
+
 def get_next_action_linear(state: Dict[str, Any], state_path: Optional[str] = None) -> Dict[str, Any]:
     """线性逐个搜索的下一步操作（兼容旧模式）"""
     step = state["current_step"]
@@ -696,6 +799,7 @@ def get_next_action_linear(state: Dict[str, Any], state_path: Optional[str] = No
 
     if step >= len(search_ops):
         state["status"] = "completed"
+        _compute_final_lists(state, state.get("disabled_ops", []))
         save_state(state, state_path)
         return {"action": "completed", "message": "所有算子已测试"}
 
@@ -734,14 +838,20 @@ def get_next_action(state_path: Optional[str] = None) -> Dict[str, Any]:
         return get_next_action_oot(state, state_path)
     elif search_phase == "oot_verify":
         # 累积验证已完成，根据结果决定下一步（由 update 处理）
-        # 如果还在 oot_verify 说明 update 后没切换，进入 group
-        state["search_phase"] = "group"
+        # 如果还在 oot_verify 说明 update 后没切换，进入下一阶段
+        search_mode = state.get("search_mode", "group")
+        state["search_phase"] = search_mode
         save_state(state, state_path)
+        if search_mode == "progressive":
+            return get_next_action_progressive(state, state_path)
         return get_next_action_group(state, state_path)
 
-    # group / linear 阶段
-    is_reverse = state.get("search_direction") == "reverse"
-    if state.get("search_mode") == "group":
+    # progressive / group / linear 阶段
+    search_mode = state.get("search_mode", "group")
+    if search_mode == "progressive":
+        action = get_next_action_progressive(state, state_path)
+    elif search_mode == "group":
+        is_reverse = state.get("search_direction") == "reverse"
         if is_reverse:
             action = get_next_action_group_reverse(state, state_path)
         else:
@@ -752,12 +862,20 @@ def get_next_action(state_path: Optional[str] = None) -> Dict[str, Any]:
     # Plugin 模式：在 action 中附加环境变量信息
     if state.get("plugin_mode") and action.get("action") not in ("completed", "failed", "error"):
         oot_bl = state.get("oot_blacklist", [])
-        flagos_bl = action.get("test_disabled_ops", [])
         env_vars = {"USE_FLAGGEMS": "1", "VLLM_FL_PREFER_ENABLED": "true"}
         if oot_bl:
             env_vars["VLLM_FL_OOT_BLACKLIST"] = ",".join(oot_bl)
-        if flagos_bl:
-            env_vars["VLLM_FL_FLAGOS_BLACKLIST"] = ",".join(flagos_bl)
+
+        test_disabled = action.get("test_disabled_ops", [])
+        if state.get("use_whitelist"):
+            whitelist = _compute_enabled_whitelist(state, test_disabled)
+            if whitelist:
+                env_vars["VLLM_FL_FLAGOS_WHITELIST"] = ",".join(whitelist)
+        else:
+            blacklist = _compute_full_blacklist(state, test_disabled)
+            if blacklist:
+                env_vars["VLLM_FL_FLAGOS_BLACKLIST"] = ",".join(blacklist)
+
         action["env_vars"] = env_vars
         action["env_inline"] = env_to_inline(env_vars)
 
@@ -767,6 +885,50 @@ def get_next_action(state_path: Optional[str] = None) -> Dict[str, Any]:
 # =============================================================================
 # 结果更新
 # =============================================================================
+
+def _compute_full_blacklist(state: Dict[str, Any], search_disabled: List[str]) -> List[str]:
+    """计算完整 flagos 黑名单 = 搜索排除 + (all_ops - search_ops)"""
+    all_ops = set(state.get("all_ops", []))
+    search_ops = set(state.get("search_ops", state.get("all_ops", [])))
+    unsearched = all_ops - search_ops  # 注册表中有但 txt 中没有的算子
+    return sorted(set(search_disabled) | unsearched)
+
+
+def _compute_enabled_whitelist(state: Dict[str, Any], search_disabled: List[str]) -> List[str]:
+    """计算白名单 = search_ops - search_disabled（只列出要启用的算子）"""
+    search_ops = set(state.get("search_ops", state.get("all_ops", [])))
+    return sorted(search_ops - set(search_disabled))
+
+
+def _supports_whitelist() -> bool:
+    """判断当前环境 FlagGems 是否支持白名单（>= 4.2.1rc0）"""
+    try:
+        import flag_gems
+        ver = getattr(flag_gems, "__version__", "")
+        if not ver or ver == "installed":
+            return False
+        try:
+            from packaging.version import Version
+            return Version(ver) >= Version("4.2.1rc0")
+        except ImportError:
+            base = re.match(r"(\d+)\.(\d+)\.(\d+)", ver)
+            if not base:
+                return False
+            parts = [int(base.group(i)) for i in (1, 2, 3)]
+            return parts >= [4, 2, 1]
+    except Exception:
+        return False
+
+
+def _compute_final_lists(state: Dict[str, Any], search_disabled: List[str]):
+    """搜索完成时，根据 use_whitelist 计算并存储最终的 whitelist/blacklist"""
+    if state.get("use_whitelist"):
+        state["flagos_whitelist"] = _compute_enabled_whitelist(state, search_disabled)
+        state["flagos_blacklist"] = []
+    else:
+        state["flagos_blacklist"] = _compute_full_blacklist(state, search_disabled)
+        state["flagos_whitelist"] = []
+
 
 def compute_min_ratio(throughputs: Dict[str, float], native_throughput: float) -> float:
     """计算多并发级别中的最小 ratio"""
@@ -818,6 +980,8 @@ def update_result(op_name: str, throughput: Optional[float] = None,
 
     if search_phase in ("oot", "oot_verify"):
         _update_oot_result(state, op_name, ratio, target_ratio, log_entry)
+    elif search_mode == "progressive":
+        _update_progressive_result(state, op_name, ratio, target_ratio, log_entry)
     elif search_mode == "group":
         is_reverse = state.get("search_direction") == "reverse"
         if is_reverse:
@@ -835,6 +999,7 @@ def update_result(op_name: str, throughput: Optional[float] = None,
     if search_mode == "linear" and state["current_step"] >= len(search_ops):
         state["status"] = "completed"
         state["completed_at"] = datetime.now().isoformat()
+        _compute_final_lists(state, state.get("disabled_ops", []))
 
     save_state(state, state_path)
 
@@ -863,12 +1028,14 @@ def _update_oot_result(state: Dict[str, Any], op_name: str,
             state["status"] = "completed"
             state["search_phase"] = "done"
             state["completed_at"] = datetime.now().isoformat()
+            _compute_final_lists(state, [])  # OOT 达标，flagos 层无需排除
             print(f"  [OOT 累积] 达标 {ratio*100:.1f}% - 搜索完成")
         else:
+            search_mode = state.get("search_mode", "group")
             log_entry["decision"] = "oot_insufficient"
-            log_entry["reason"] = f"OOT 禁用后 ratio {ratio*100:.1f}% < {target_ratio*100:.0f}%, 进入 group 搜索"
-            state["search_phase"] = "group"
-            print(f"  [OOT 累积] 未达标 {ratio*100:.1f}% - 进入 group 阶段")
+            log_entry["reason"] = f"OOT 禁用后 ratio {ratio*100:.1f}% < {target_ratio*100:.0f}%, 进入 {search_mode} 搜索"
+            state["search_phase"] = search_mode
+            print(f"  [OOT 累积] 未达标 {ratio*100:.1f}% - 进入 {search_mode} 阶段")
         return
 
     # 单个 OOT 算子测试
@@ -1192,6 +1359,22 @@ def generate_report(state_path: Optional[str] = None) -> str:
             report.append(f"  {gname}: {gresult} ({len(disabled_in_group)}/{len(group_ops)} 禁用)")
         report.append("")
 
+    # 渐进排除结果
+    ps = state.get("progressive_state", {})
+    if ps and ps.get("phase") == "done":
+        report.append("渐进排除结果:")
+        rounds = ps.get("rounds", [])
+        current_round = ps.get("current_round", 0)
+        for i, rnd in enumerate(rounds):
+            ops = ps["excluded_by_round"].get(rnd, [])
+            if i <= current_round:
+                status = "已排除" if i < current_round or ps["phase"] == "done" else "当前轮"
+                report.append(f"  {rnd} 风险 ({len(ops)} 个): {status}")
+            else:
+                report.append(f"  {rnd} 风险 ({len(ops)} 个): 未测试（已提前达标）")
+        report.append(f"  累计排除: {len(ps.get('cumulative_excluded', []))} 个算子")
+        report.append("")
+
     if state["disabled_ops"]:
         report.append("禁用的算子:")
         for op in sorted(state["disabled_ops"]):
@@ -1235,6 +1418,8 @@ def main():
     init_parser.add_argument("--plugin-mode", action="store_true", help="Plugin 模式（使用环境变量控制，含 OOT 搜索）")
     init_parser.add_argument("--oot-ops", help="自定义 OOT 算子列表（逗号分隔，默认使用内置列表）")
     init_parser.add_argument("--reverse", action="store_true", help="反向搜索（从全禁用逐步启用，适合大量算子注册干扰 dispatch 的场景）")
+    init_parser.add_argument("--search-strategy", choices=["progressive", "group", "linear"],
+                             default="progressive", help="搜索策略: progressive(先验预筛+渐进排除) | group(分组二分) | linear(线性)")
     init_parser.add_argument("--state-path", help="状态文件路径")
 
     # next 子命令
@@ -1279,6 +1464,7 @@ def main():
             plugin_mode=args.plugin_mode,
             oot_ops=oot_ops_list,
             reverse=args.reverse,
+            search_strategy=args.search_strategy,
             state_path=args.state_path,
         )
 
@@ -1315,6 +1501,8 @@ def main():
             "current_op": state.get("current_op", ""),
             "oot_blacklist": state.get("oot_blacklist", []),
             "flagos_blacklist": state.get("flagos_blacklist", []),
+            "flagos_whitelist": state.get("flagos_whitelist", []),
+            "use_whitelist": state.get("use_whitelist", False),
         }
         gs = state.get("group_state", {})
         if gs:
@@ -1322,6 +1510,13 @@ def main():
             idx = gs.get("current_group_idx", 0)
             order = gs.get("group_order", [])
             status_info["current_group"] = order[idx] if idx < len(order) else "done"
+        ps = state.get("progressive_state", {})
+        if ps:
+            rounds = ps.get("rounds", [])
+            current_round = ps.get("current_round", 0)
+            status_info["progressive_phase"] = ps.get("phase", "?")
+            status_info["progressive_round"] = f"{current_round + 1}/{len(rounds)}" if current_round < len(rounds) else "done"
+            status_info["cumulative_excluded"] = len(ps.get("cumulative_excluded", []))
         print(json.dumps(status_info, indent=2, ensure_ascii=False))
 
     elif args.command == "mapping":
