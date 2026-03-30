@@ -534,9 +534,9 @@ USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true VLLM_FL_OOT_BLACKLIST=fused_moe VLLM_
 ### 步骤 O1 — 复制优化器到容器
 
 ```bash
-docker cp skills/flagos-operator-replacement/operator_optimizer.py \
+docker cp skills/flagos-operator-replacement/tools/operator_optimizer.py \
   $CONTAINER:/flagos-workspace/scripts/
-docker cp skills/flagos-operator-replacement/operator_search.py \
+docker cp skills/flagos-operator-replacement/tools/operator_search.py \
   $CONTAINER:/flagos-workspace/scripts/
 docker cp skills/flagos-operator-replacement/tools/apply_op_config.py \
   $CONTAINER:/flagos-workspace/scripts/
@@ -826,6 +826,7 @@ V2 (Full) → V3 (Optimized) 性能比: 95.2% of V1 (Native)
 - operator_config.json 已保存
 - context.yaml 已更新
 - `traces/11_operator_replacement.json` 已写入（记录搜索策略、每轮测试命令、禁用算子列表、最终性能比）
+- `timing.steps.operator_replacement` 已更新为本步骤的 `duration_seconds`
 
 ---
 

@@ -238,6 +238,27 @@ optimization:
   search_log: []              # 搜索历史记录
 
 # ============================================================================
+# 流程计时 (由编排层维护)
+# ============================================================================
+timing:
+  workflow_start: ""          # 流程开始时间 (ISO 8601)
+  workflow_end: ""            # 流程结束时间 (ISO 8601)
+  total_duration_seconds: 0   # 全流程总耗时 (秒)
+  steps:                      # 各步骤耗时 (秒)
+    container_preparation: 0
+    environment_inspection: 0
+    service_startup_default: 0
+    eval_v1: 0
+    perf_v1: 0
+    service_startup_flagos: 0
+    eval_v2: 0
+    perf_v2: 0
+    performance_compare: 0
+    operator_replacement: 0
+    perf_v3: 0
+    final_report: 0
+
+# ============================================================================
 # 元数据
 # ============================================================================
 metadata:

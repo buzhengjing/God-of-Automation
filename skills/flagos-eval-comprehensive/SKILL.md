@@ -671,3 +671,4 @@ sleep 5
 - [ ] 对应 trace 文件已写入：
   - V1 评测 → `traces/04_eval_native.json`
   - V2 评测 → `traces/07_eval_full_flagos.json`
+- [ ] `timing.steps.<对应步骤>` 已更新为本步骤的 `duration_seconds`（V1 → `eval_v1`，V2 → `eval_v2`）

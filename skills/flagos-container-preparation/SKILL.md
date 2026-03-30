@@ -201,6 +201,8 @@ workspace:
 - 四个子目录已创建（results/、traces/、logs/、config/）
 - context.yaml 已更新
 - `traces/01_container_preparation.json` 已写入（记录 docker run 命令、setup_workspace 部署结果）
+- `timing.workflow_start` 已写入 context.yaml（ISO 8601，流程起始时间）
+- `timing.steps.container_preparation` 已更新为本步骤的 `duration_seconds`
 
 ---
 

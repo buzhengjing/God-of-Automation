@@ -61,32 +61,32 @@ if [ -f "${PROJECT_ROOT}/skills/flagos-service-startup/tools/wait_for_service.sh
 fi
 
 # 性能测试
-if [ -f "${PROJECT_ROOT}/skills/flagos-performance-testing/benchmark_runner.py" ]; then
-    docker cp "${PROJECT_ROOT}/skills/flagos-performance-testing/benchmark_runner.py" \
+if [ -f "${PROJECT_ROOT}/skills/flagos-performance-testing/tools/benchmark_runner.py" ]; then
+    docker cp "${PROJECT_ROOT}/skills/flagos-performance-testing/tools/benchmark_runner.py" \
         "${CONTAINER}:/flagos-workspace/scripts/benchmark_runner.py"
     SCRIPTS_COPIED=$((SCRIPTS_COPIED + 1))
     echo "  ✓ benchmark_runner.py"
 fi
 
 # 性能对比
-if [ -f "${PROJECT_ROOT}/skills/flagos-performance-testing/performance_compare.py" ]; then
-    docker cp "${PROJECT_ROOT}/skills/flagos-performance-testing/performance_compare.py" \
+if [ -f "${PROJECT_ROOT}/skills/flagos-performance-testing/tools/performance_compare.py" ]; then
+    docker cp "${PROJECT_ROOT}/skills/flagos-performance-testing/tools/performance_compare.py" \
         "${CONTAINER}:/flagos-workspace/scripts/performance_compare.py"
     SCRIPTS_COPIED=$((SCRIPTS_COPIED + 1))
     echo "  ✓ performance_compare.py"
 fi
 
 # 算子优化
-if [ -f "${PROJECT_ROOT}/skills/flagos-operator-replacement/operator_optimizer.py" ]; then
-    docker cp "${PROJECT_ROOT}/skills/flagos-operator-replacement/operator_optimizer.py" \
+if [ -f "${PROJECT_ROOT}/skills/flagos-operator-replacement/tools/operator_optimizer.py" ]; then
+    docker cp "${PROJECT_ROOT}/skills/flagos-operator-replacement/tools/operator_optimizer.py" \
         "${CONTAINER}:/flagos-workspace/scripts/operator_optimizer.py"
     SCRIPTS_COPIED=$((SCRIPTS_COPIED + 1))
     echo "  ✓ operator_optimizer.py"
 fi
 
 # 算子搜索编排
-if [ -f "${PROJECT_ROOT}/skills/flagos-operator-replacement/operator_search.py" ]; then
-    docker cp "${PROJECT_ROOT}/skills/flagos-operator-replacement/operator_search.py" \
+if [ -f "${PROJECT_ROOT}/skills/flagos-operator-replacement/tools/operator_search.py" ]; then
+    docker cp "${PROJECT_ROOT}/skills/flagos-operator-replacement/tools/operator_search.py" \
         "${CONTAINER}:/flagos-workspace/scripts/operator_search.py"
     SCRIPTS_COPIED=$((SCRIPTS_COPIED + 1))
     echo "  ✓ operator_search.py"

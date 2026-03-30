@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-vLLM 性能基准测试工具 (重构版)
+vLLM 性能基准测试工具
 
-基于 perf.py 重构，新增:
+新增:
 - --strategy: 四档测试强度 (quick/fast/comprehensive/fixed)
 - --final-burst: 显式 opt-in 最终无限制并发测试 (num_prompts=1000)
 - --output-name: 指定输出文件名

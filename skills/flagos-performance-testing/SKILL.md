@@ -383,3 +383,4 @@ Native 基线: 6500 tok/s（首次 native 测试时不显示此行）
   - `traces/09_performance_compare.json`（性能对比）
   - `traces/11_perf_v3.json`（仅不达标时）
   - `traces/13_final_report.json`（最终报告）
+- `timing.steps.<对应步骤>` 已更新为本步骤的 `duration_seconds`（V1 → `perf_v1`，V2 → `perf_v2`，对比 → `performance_compare`，V3 → `perf_v3`，报告 → `final_report`）

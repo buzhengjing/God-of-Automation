@@ -409,6 +409,7 @@ environment:
   - default 模式 → `traces/03_service_startup_default.json`
   - native 模式（步骤⑥前）→ 记录在 `traces/06_perf_native.json` 的 actions 中
   - flagos 模式 → `traces/07_service_startup_flagos.json`
+- `timing.steps.<对应步骤>` 已更新为本步骤的 `duration_seconds`（default → `service_startup_default`，flagos → `service_startup_flagos`）
 
 ---
 

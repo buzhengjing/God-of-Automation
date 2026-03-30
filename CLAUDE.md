@@ -178,6 +178,12 @@ bash skills/flagos-container-preparation/tools/setup_workspace.sh $CONTAINER
 
 **强制规则**：每个 Skill 完成后，Claude 必须在 `traces/` 下写入对应步骤的 trace JSON 文件。
 
+**计时强制规则**：
+- 每个 Skill 开始时记录 `timestamp_start`（ISO 8601），结束时记录 `timestamp_end` 和 `duration_seconds`
+- 完成 trace 写入后，同步更新 `context.yaml` 的 `timing.steps.<step_name>` 字段
+- 步骤①开始时额外写入 `timing.workflow_start`
+- 步骤⑫完成时写入 `timing.workflow_end` 和 `timing.total_duration_seconds`（= workflow_end - workflow_start）
+
 ### Trace JSON 统一格式
 
 ```json
@@ -305,6 +311,21 @@ GPU: <gpu_count>x <gpu_type>
 | Test Case | Conc | V1 TPS | V3 TPS | V3/V1     | V2 TPS | V2/V1     |
 | --------- | ---- | ------ | ------ | --------- | ------ | --------- |
 | 1k→1k     | 256  | XXXXX  | XXXXX  | **XX.X%** | XXXXX  | **XX.X%** |
+
+流程耗时:
+  全流程: XXh XXm XXs
+  ①容器准备:     XXm XXs
+  ②环境检测:     XXm XXs
+  ③初始启动:     XXm XXs
+  ④精度V1:       XXm XXs
+  ⑤性能V1:       XXm XXs
+  ⑥启动FlagGems: XXm XXs
+  ⑦精度V2:       XXm XXs
+  ⑧性能V2:       XXm XXs
+  ⑨性能对比:     XXm XXs
+  ⑩算子替换:     XXm XXs
+  ⑪性能V3:       XXm XXs
+  ⑫最终报告:     XXm XXs
 
 结论: V3 (Optimized) 达标(≥80%) / 不达标
 ========================================

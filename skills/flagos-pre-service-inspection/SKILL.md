@@ -118,6 +118,7 @@ docker exec $CONTAINER python3 /flagos-workspace/scripts/inspect_env.py --report
 - context.yaml 已更新（含 environment 字段）
 - 报告已生成
 - `traces/02_environment_inspection.json` 已写入（记录 inspect_env.py 命令、关键输出）
+- `timing.steps.environment_inspection` 已更新为本步骤的 `duration_seconds`
 
 ---
 
