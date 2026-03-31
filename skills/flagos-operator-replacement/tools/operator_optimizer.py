@@ -1052,9 +1052,16 @@ def update_result(op_name: str, throughput: Optional[float] = None,
     state["search_log"].append(log_entry)
     state["current_ratio"] = ratio
 
+    # 达标即停：无论哪种搜索模式，ratio 达标且状态未被子函数标记为 completed 时，强制完成
+    if ratio >= target_ratio and state["status"] != "completed":
+        state["status"] = "completed"
+        state["completed_at"] = datetime.now().isoformat()
+        _compute_final_lists(state, state.get("disabled_ops", []))
+        print(f"  [达标即停] ratio {ratio*100:.1f}% >= {target_ratio*100:.0f}% — 停止优化")
+
     # 检查线性模式是否完成
     search_ops = state.get("search_ops", state["all_ops"])
-    if search_mode == "linear" and state["current_step"] >= len(search_ops):
+    if search_mode == "linear" and state["current_step"] >= len(search_ops) and state["status"] != "completed":
         state["status"] = "completed"
         state["completed_at"] = datetime.now().isoformat()
         _compute_final_lists(state, state.get("disabled_ops", []))
