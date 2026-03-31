@@ -614,6 +614,7 @@ with open('/flagos-workspace/results/runtime_ops.json', 'w') as f:
 ${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py init \
   --ops-file /flagos-workspace/results/ops_list.json \
   --native-throughput <native_perf.output_throughput> \
+  --native-benchmark /flagos-workspace/results/v1_benchmark.json \
   --target-ratio 0.8 \
   --plugin-mode
 ```
@@ -623,6 +624,7 @@ ${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py init \
 ${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py init \
   --ops-file /flagos-workspace/results/ops_list.json \
   --native-throughput <native_perf.output_throughput> \
+  --native-benchmark /flagos-workspace/results/v1_benchmark.json \
   --target-ratio 0.8
 ```
 
@@ -631,6 +633,7 @@ ${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py init \
 ${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py init \
   --ops-file /flagos-workspace/results/ops_list.json \
   --native-throughput <native_perf.output_throughput> \
+  --native-benchmark /flagos-workspace/results/v1_benchmark.json \
   --target-ratio 0.8 \
   --search-strategy group
 ```
@@ -728,6 +731,7 @@ Plugin 场景需同步修改 dispatch 层。
 ${CMD_PREFIX} python3 /flagos-workspace/scripts/operator_optimizer.py init \
   --ops-file /flagos-workspace/results/ops_list.json \
   --native-throughput <native_perf.output_throughput> \
+  --native-benchmark /flagos-workspace/results/v1_benchmark.json \
   --target-ratio 0.8 \
   --plugin-mode \
   --reverse

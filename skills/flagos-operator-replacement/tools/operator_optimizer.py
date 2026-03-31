@@ -980,6 +980,9 @@ def compute_min_ratio(throughputs: Dict[str, Any], native_throughput: float = 0,
         if isinstance(val, dict):
             # 新格式: {"output": x, "total": y}
             native_val = (native_throughputs or {}).get(key, {})
+            if not native_val and native_throughput > 0:
+                # fallback: native_throughputs 为空时用单值对比
+                native_val = {"output": native_throughput, "total": native_throughput}
             if isinstance(native_val, (int, float)):
                 # 兼容: native 还是旧格式单值
                 native_val = {"output": native_val, "total": native_val}
