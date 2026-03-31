@@ -14,6 +14,8 @@ Usage:
     python apply_op_config.py --mode custom \
         --oot-blacklist "fused_moe" \
         --flagos-blacklist "softmax,layer_norm"
+    python apply_op_config.py --mode custom \
+        --flagos-whitelist "addmm,mm,bmm"
     python apply_op_config.py --from-state /path/to/operator_config.json
 """
 
@@ -23,26 +25,21 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# 共享模块导入（兼容本地开发和容器内扁平部署）
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "shared"))
 
-def env_to_inline(env_dict):
-    """将 env dict 转为内联前缀字符串: VAR1=val1 VAR2=val2"""
-    parts = []
-    for k, v in env_dict.items():
-        if " " in v or "'" in v:
-            parts.append(f"{k}='{v}'")
-        else:
-            parts.append(f"{k}={v}")
-    return " ".join(parts)
+from env_utils import env_to_inline
 
 
-def generate(mode, oot_blacklist=None, flagos_blacklist=None, per_op=None):
+def generate(mode, oot_blacklist=None, flagos_blacklist=None, flagos_whitelist=None, per_op=None):
     """
     生成环境变量字典（仅 plugin 场景使用）。
 
     mode:
       "native"  -> USE_FLAGGEMS=0 VLLM_FL_PREFER_ENABLED=false
       "full"    -> USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true
-      "custom"  -> 按 blacklist 自定义
+      "custom"  -> 按 whitelist/blacklist 自定义（白名单优先）
     """
     env = {}
 
@@ -58,7 +55,11 @@ def generate(mode, oot_blacklist=None, flagos_blacklist=None, per_op=None):
         if oot_blacklist:
             bl = ",".join(oot_blacklist) if isinstance(oot_blacklist, list) else oot_blacklist
             env["VLLM_FL_OOT_BLACKLIST"] = bl
-        if flagos_blacklist:
+        # 白名单优先，黑名单兜底
+        if flagos_whitelist:
+            wl = ",".join(flagos_whitelist) if isinstance(flagos_whitelist, list) else flagos_whitelist
+            env["VLLM_FL_FLAGOS_WHITELIST"] = wl
+        elif flagos_blacklist:
             bl = ",".join(flagos_blacklist) if isinstance(flagos_blacklist, list) else flagos_blacklist
             env["VLLM_FL_FLAGOS_BLACKLIST"] = bl
         if per_op:
@@ -74,6 +75,7 @@ def generate(mode, oot_blacklist=None, flagos_blacklist=None, per_op=None):
         "env_inline": env_to_inline(env),
         "oot_blacklist": oot_blacklist or [],
         "flagos_blacklist": flagos_blacklist or [],
+        "flagos_whitelist": flagos_whitelist or [],
         "timestamp": datetime.now().isoformat(),
     }
     print(json.dumps(result, indent=2, ensure_ascii=False))
@@ -87,13 +89,15 @@ def from_state(state_path):
 
     oot_blacklist = state.get("oot_blacklist", [])
     flagos_blacklist = state.get("flagos_blacklist", [])
+    flagos_whitelist = state.get("flagos_whitelist", [])
 
-    if not oot_blacklist and not flagos_blacklist:
-        # 无 blacklist = full 模式
+    if not oot_blacklist and not flagos_blacklist and not flagos_whitelist:
+        # 无 blacklist/whitelist = full 模式
         generate("full")
     else:
         generate("custom", oot_blacklist=oot_blacklist,
-                 flagos_blacklist=flagos_blacklist)
+                 flagos_blacklist=flagos_blacklist,
+                 flagos_whitelist=flagos_whitelist)
 
 
 def main():
@@ -106,6 +110,8 @@ def main():
                         help="OOT 层 blacklist（逗号分隔）")
     parser.add_argument("--flagos-blacklist",
                         help="FlagOS 层 blacklist（逗号分隔）")
+    parser.add_argument("--flagos-whitelist",
+                        help="FlagOS 层 whitelist（逗号分隔，优先于 blacklist）")
     parser.add_argument("--per-op",
                         help="逐算子控制（如 rms_norm=vendor;attention_backend=vendor）")
     parser.add_argument("--from-state",
@@ -118,8 +124,9 @@ def main():
     elif args.mode:
         oot_bl = args.oot_blacklist.split(",") if args.oot_blacklist else None
         flagos_bl = args.flagos_blacklist.split(",") if args.flagos_blacklist else None
+        flagos_wl = args.flagos_whitelist.split(",") if args.flagos_whitelist else None
         generate(args.mode, oot_blacklist=oot_bl, flagos_blacklist=flagos_bl,
-                 per_op=args.per_op)
+                 flagos_whitelist=flagos_wl, per_op=args.per_op)
     else:
         parser.print_help()
         sys.exit(1)

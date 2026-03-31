@@ -24,42 +24,14 @@ import re
 import sys
 import time
 from collections import defaultdict
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-# =============================================================================
-# 算子分组定义（与 operator_optimizer.py 保持一致）
-# =============================================================================
+# 共享模块导入（兼容本地开发和容器内扁平部署）
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "shared"))
 
-OOT_OPERATORS = [
-    "silu_and_mul", "rms_norm", "rotary_embedding",
-    "fused_moe", "attention_backend",
-]
-
-OPERATOR_GROUPS = {
-    "compute": [
-        "addmm", "mm", "bmm", "linear", "matmul",
-        "conv2d", "conv_depthwise2d",
-    ],
-    "memory": [
-        "copy_", "zero_", "zeros", "ones", "ones_like", "full", "fill_scalar_",
-        "clone", "to_copy", "empty_like", "new_zeros", "new_ones",
-    ],
-    "math": [
-        "cos", "sin", "pow_scalar", "reciprocal", "exp", "log", "sqrt", "rsqrt",
-        "abs", "neg", "tanh", "sigmoid", "gelu", "silu", "relu",
-        "add", "sub", "mul", "div", "add_scalar", "sub_scalar", "mul_scalar",
-        "div_scalar",
-    ],
-    "index": [
-        "gather", "scatter", "scatter_add_0", "index", "index_select",
-        "embedding", "slice_scatter", "select_scatter",
-    ],
-    "reduce": [
-        "cumsum", "sort", "sort_stable", "argmax", "arange_start",
-        "sum", "mean", "max", "min", "softmax", "log_softmax",
-        "layer_norm", "rms_norm", "group_norm",
-    ],
-}
+from ops_constants import OOT_OPERATORS, OPERATOR_GROUPS
 
 
 # =============================================================================

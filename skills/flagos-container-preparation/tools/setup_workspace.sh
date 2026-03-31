@@ -152,6 +152,24 @@ if [ -f "${PROJECT_ROOT}/skills/flagos-eval-comprehensive/tools/fast_gpqa_config
     echo "  ✓ eval/fast_gpqa_config.yaml"
 fi
 
+# 共享模块（env_utils / ops_constants，所有脚本依赖）
+for shared_mod in env_utils.py ops_constants.py; do
+    if [ -f "${PROJECT_ROOT}/skills/shared/${shared_mod}" ]; then
+        docker cp "${PROJECT_ROOT}/skills/shared/${shared_mod}" \
+            "${CONTAINER}:/flagos-workspace/scripts/${shared_mod}"
+        SCRIPTS_COPIED=$((SCRIPTS_COPIED + 1))
+        echo "  ✓ ${shared_mod} (shared)"
+    fi
+done
+
+# GPU 统一检测
+if [ -f "${PROJECT_ROOT}/shared/detect_gpu.py" ]; then
+    docker cp "${PROJECT_ROOT}/shared/detect_gpu.py" \
+        "${CONTAINER}:/flagos-workspace/scripts/detect_gpu.py"
+    SCRIPTS_COPIED=$((SCRIPTS_COPIED + 1))
+    echo "  ✓ detect_gpu.py (shared)"
+fi
+
 echo "  共复制 ${SCRIPTS_COPIED} 个脚本"
 
 # 2.5. 确保 context.yaml 存在

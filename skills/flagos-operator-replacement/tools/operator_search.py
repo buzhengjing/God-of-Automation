@@ -38,10 +38,14 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# 共享模块导入（容器内所有脚本在同一 scripts/ 目录）
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # =============================================================================
 # 配置
@@ -287,22 +291,16 @@ def restart_service(stop_cmd: str, startup_cmd: str,
 def verify_ops_via_txt() -> Optional[List[str]]:
     """重启后读取运行时 txt 文件验证算子变化"""
     try:
-        # 导入 find_ops_list_file（假设 operator_optimizer.py 在同一目录）
-        import importlib.util
-        optimizer_path = Path(DEFAULT_OPTIMIZER_SCRIPT)
-        if optimizer_path.exists():
-            spec = importlib.util.spec_from_file_location("operator_optimizer", str(optimizer_path))
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            result = mod.find_ops_list_file()
-            if result.get("found"):
-                ops = result["ops"]
-                print(f"  [验证] 运行时 txt: {result['path']} ({len(ops)} 个算子)")
-                return ops
-            else:
-                print(f"  [验证] 未找到运行时 txt 文件")
+        from operator_optimizer import find_ops_list_file
+        result = find_ops_list_file()
+        if result.get("found"):
+            ops = result["ops"]
+            print(f"  [验证] 运行时 txt: {result['path']} ({len(ops)} 个算子)")
+            return ops
         else:
-            print(f"  [验证] optimizer 脚本不存在: {optimizer_path}")
+            print(f"  [验证] 未找到运行时 txt 文件")
+    except ImportError:
+        print(f"  [验证] operator_optimizer 模块不可用")
     except Exception as e:
         print(f"  [验证] 读取 txt 失败: {e}")
     return None
@@ -333,27 +331,21 @@ def run_benchmark_quick(perf_config: str, benchmark_script: str,
         # 兼容新旧格式：旧格式有 results 包装，新格式直接是扁平结构
         results = data.get("results", data) if isinstance(data, dict) else data
 
-        # 提取吞吐量：从每个 test case 的并发结果中找最大 output throughput
+        # 提取吞吐量：每个 test_case × 每个 concurrency 的 output + total 双指标
         throughputs = {}
         for tc_name, tc_results in results.items():
             if not isinstance(tc_results, dict):
                 continue
-            # 新格式：无 _search_meta，直接遍历并发结果取最大值
-            # 旧格式兼容：如果有 _search_meta 则优先使用
-            meta = tc_results.get("_search_meta", {})
-            best_tp = meta.get("best_throughput", 0)
-            if best_tp > 0:
-                throughputs[tc_name] = best_tp
-                continue
-            # 新格式：从并发结果中提取最优
             for key, metrics in tc_results.items():
                 if key.startswith("_") or not isinstance(metrics, dict) or "error" in metrics:
                     continue
-                tp = metrics.get('Output token throughput (tok/s)', 0) or 0
-                if tp > best_tp:
-                    best_tp = tp
-            if best_tp > 0:
-                throughputs[tc_name] = best_tp
+                output_tp = metrics.get('Output token throughput (tok/s)', 0) or 0
+                total_tp = metrics.get('Total token throughput (tok/s)', 0) or 0
+                if output_tp > 0 or total_tp > 0:
+                    throughputs[f"{tc_name}|{key}"] = {
+                        "output": output_tp,
+                        "total": total_tp,
+                    }
 
         return {"success": True, "throughputs": throughputs, "results": results}
     except Exception as e:
@@ -418,13 +410,20 @@ def preflight_framework_check(service_startup_cmd: str,
         return {"pass": False, "ratio": 0, "throughput": 0,
                 "message": f"ERROR: 框架预检 benchmark 失败: {bench.get('error', '?')}"}
 
-    # 取最大吞吐量与 native 对比
+    # 取最大 output 吞吐量与 native 对比（preflight 只做粗略判断）
     throughputs = bench.get("throughputs", {})
     if not throughputs:
         return {"pass": False, "ratio": 0, "throughput": 0,
                 "message": "ERROR: 框架预检无有效吞吐量数据"}
 
-    max_tp = max(throughputs.values())
+    # 兼容新格式 {"case|conc": {"output": x, "total": y}} 和旧格式 {"case": float}
+    output_vals = []
+    for v in throughputs.values():
+        if isinstance(v, dict):
+            output_vals.append(v.get("output", 0) or 0)
+        else:
+            output_vals.append(v)
+    max_tp = max(output_vals) if output_vals else 0
     ratio = max_tp / native_throughput if native_throughput > 0 else 0
 
     result = {
@@ -474,6 +473,8 @@ def run_search_step(state_path: str, perf_config: str,
                     apply_config_script: str = DEFAULT_APPLY_CONFIG_SCRIPT) -> Dict[str, Any]:
     """执行单轮搜索步骤"""
 
+    step_timing = {}
+
     # 1. 获取下一步操作
     print("\n" + "=" * 60)
     print(f"[搜索步骤] {datetime.now().strftime('%H:%M:%S')}")
@@ -489,6 +490,7 @@ def run_search_step(state_path: str, perf_config: str,
     print(f"\n操作: {action.get('message', action_type)}")
 
     # 2. 应用算子配置
+    t0 = time.time()
     config_result = apply_operator_config(
         action,
         apply_config_script=apply_config_script,
@@ -496,6 +498,7 @@ def run_search_step(state_path: str, perf_config: str,
         capabilities=capabilities,
         gems_txt_path=gems_txt_path,
     )
+    step_timing["config_seconds"] = round(time.time() - t0, 1)
     # plugin 模式返回 env_inline 字符串或 None，非 plugin 返回 True/False
     if plugin_mode:
         env_inline = config_result if isinstance(config_result, str) else None
@@ -507,9 +510,11 @@ def run_search_step(state_path: str, perf_config: str,
         env_inline = None
 
     # 3. 重启服务
+    t0 = time.time()
     if not restart_service(SERVICE_STOP_CMD, service_startup_cmd, wait_script,
                            env_inline=env_inline):
         return {"action": "error", "message": "服务重启失败"}
+    step_timing["restart_seconds"] = round(time.time() - t0, 1)
 
     # 3.5. 重启后验证算子变化
     runtime_ops = verify_ops_via_txt()
@@ -520,8 +525,10 @@ def run_search_step(state_path: str, perf_config: str,
             print(f"  [验证] 警告: {len(unexpected)} 个应禁用的算子仍在运行时 txt 中: {unexpected[:5]}")
 
     # 4. 运行 benchmark
+    t0 = time.time()
     bench_result = run_benchmark_quick(perf_config, benchmark_script,
                                        f"search_step_{action.get('step', 0)}")
+    step_timing["benchmark_seconds"] = round(time.time() - t0, 1)
 
     if not bench_result.get("success"):
         return {"action": "error", "message": f"Benchmark 失败: {bench_result.get('error', '?')}"}
@@ -531,14 +538,17 @@ def run_search_step(state_path: str, perf_config: str,
     native_tp = state.get("native_throughput", 0)
     throughputs = bench_result.get("throughputs", {})
 
-    op_name = action.get("group", action.get("op", "unknown"))
+    op_name = action.get("group", action.get("round", action.get("op", "unknown")))
     update = update_optimizer_result(
         state_path, optimizer_script,
         op_name, throughputs, native_tp
     )
 
     print(f"\n[步骤完成] decision={update.get('decision', '?')}, "
-          f"ratio={update.get('ratio', 0)*100:.1f}%")
+          f"ratio={update.get('ratio', 0)*100:.1f}%"
+          f" (config={step_timing['config_seconds']}s"
+          f" restart={step_timing['restart_seconds']}s"
+          f" bench={step_timing['benchmark_seconds']}s)")
 
     return {
         "action": action_type,
@@ -547,6 +557,7 @@ def run_search_step(state_path: str, perf_config: str,
         "decision": update.get("decision", "?"),
         "ratio": update.get("ratio", 0),
         "status": update.get("status", "?"),
+        "timing": step_timing,
     }
 
 
@@ -559,6 +570,7 @@ def run_full_search(state_path: str, perf_config: str,
                     **kwargs) -> Dict[str, Any]:
     """运行完整搜索循环"""
     # 读取搜索方向
+    _state = {}
     try:
         _state = load_json(state_path)
         search_direction = _state.get("search_direction", "forward")
@@ -568,13 +580,15 @@ def run_full_search(state_path: str, perf_config: str,
     print(f"\n{'#' * 60}")
     print(f"# 算子搜索开始 (最多 {max_rounds} 轮)")
     if plugin_mode:
-        print(f"# 模式: Plugin (OOT → group 两阶段)")
+        _search_mode = _state.get("search_mode", "progressive")
+        print(f"# 模式: Plugin (OOT → {_search_mode} 两阶段)")
     print(f"# 搜索方向: {search_direction}")
     print(f"{'#' * 60}\n")
 
     search_log = []
     start_time = time.time()
     framework_check = None
+    preflight_elapsed = 0
 
     # Plugin 模式：搜索前验证框架开销
     if plugin_mode:
@@ -585,15 +599,18 @@ def run_full_search(state_path: str, perf_config: str,
             native_tp = 0
 
         if native_tp > 0:
+            t_pf = time.time()
             framework_check = preflight_framework_check(
                 service_startup_cmd, perf_config, native_tp,
                 wait_script=kwargs.get("wait_script", DEFAULT_WAIT_SCRIPT),
                 benchmark_script=kwargs.get("benchmark_script", DEFAULT_BENCHMARK_SCRIPT),
             )
+            preflight_elapsed = round(time.time() - t_pf, 1)
             if not framework_check.get("pass") and framework_check.get("ratio", 1.0) < 0.80:
                 print("\nERROR: 框架本身性能 <80%，建议先排查 plugin 问题")
                 print("搜索仍将继续，但结果可能不可靠\n")
 
+    search_start = time.time()
     for round_num in range(1, max_rounds + 1):
         print(f"\n{'=' * 60}")
         print(f"第 {round_num}/{max_rounds} 轮")
@@ -613,7 +630,13 @@ def run_full_search(state_path: str, perf_config: str,
             break
 
     elapsed = time.time() - start_time
+    search_elapsed = round(time.time() - search_start, 1)
     total_rounds = len(search_log)
+
+    # 汇总子阶段累计耗时
+    benchmark_total = sum(r.get("timing", {}).get("benchmark_seconds", 0) for r in search_log)
+    restart_total = sum(r.get("timing", {}).get("restart_seconds", 0) for r in search_log)
+    config_total = sum(r.get("timing", {}).get("config_seconds", 0) for r in search_log)
 
     # 最终状态
     try:
@@ -632,6 +655,15 @@ def run_full_search(state_path: str, perf_config: str,
         "disabled_list": state.get("disabled_ops", []),
         "framework_check": framework_check,
         "search_log": search_log,
+        "timing": {
+            "total_seconds": round(elapsed),
+            "preflight_seconds": preflight_elapsed,
+            "search_seconds": search_elapsed,
+            "rounds": total_rounds,
+            "benchmark_total_seconds": round(benchmark_total, 1),
+            "restart_total_seconds": round(restart_total, 1),
+            "config_total_seconds": round(config_total, 1),
+        },
     }
 
     print(f"\n{'#' * 60}")

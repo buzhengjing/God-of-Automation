@@ -96,10 +96,10 @@
 
 ---
 
-## 仅在以下情况询问用户（全流程预期 ≤3 次交互）
+## 仅在以下情况询问用户（全流程预期 ≤4 次交互）
 
 1. **docker run 命令最终确认** — 不可逆操作，需用户确认参数
-2. **容器网络不通且需要代理配置** — 自动检测网络后才问
+2. **任何网络操作失败** — pip install、数据集下载、git clone、docker pull 失败一次即问代理，不反复重试（详见"网络问题处理策略"）
 3. **搜索 3 轮仍未达标** — 需要用户决定是否继续
 4. **精度评测是否执行** — 仅步骤④（V1 精度）询问用户，quick 模式下可跳过；步骤⑦（V2 精度）**强制执行不询问**
 
@@ -247,14 +247,23 @@ TRACE_EOF"
 
 ---
 
-## 网络问题自动降级策略
+## 网络问题处理策略
 
-容器内网络不通时，**不立即询问用户**，按以下顺序自动处理：
+所有网络操作（pip install、数据集下载、git clone、docker pull）遵循同一规则：
 
-1. 容器内尝试 `curl --connect-timeout 3 https://github.com` 检测
-2. 如果失败 → 在**宿主机** `git clone` → `docker cp` 到容器
-3. 宿主机也失败 → **此时才询问用户**是否有代理配置
-4. 有代理 → 在容器内设置 `http_proxy/https_proxy` 后重试
+1. **尝试一次**，如果失败且错误信息包含网络关键词（timeout、connection refused、DNS、SSL、Could not resolve host、Network unreachable），**立即判定为网络问题**
+2. **立即询问用户**：告知哪个操作因网络失败，索要代理地址（http_proxy）或镜像源
+3. 用户提供代理后，设置环境变量重试：
+   - 容器内：`docker exec -e http_proxy=xxx -e https_proxy=xxx`
+   - pip：额外支持 `-i 镜像源` 如用户提供
+4. 将代理配置写入 context.yaml `network` 字段，后续网络下载操作自动复用，不再重复询问
+5. **下载完成后立即关闭代理**（`unset http_proxy https_proxy no_proxy`），避免代理影响后续本地服务访问（如 localhost API 调用）
+
+**禁止行为**：
+- 不要在网络失败后反复重试同一操作
+- 不要尝试换源、换命令等 workaround
+- 不要在宿主机上尝试替代方案后才问用户
+- 识别到网络问题就停，问用户，拿到代理再继续
 
 ---
 
