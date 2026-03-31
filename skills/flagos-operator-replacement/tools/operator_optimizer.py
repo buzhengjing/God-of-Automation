@@ -250,24 +250,12 @@ def classify_ops(ops: List[str]) -> Dict[str, List[str]]:
 
 
 def filter_runtime_ops(all_ops: List[str], runtime_ops: List[str]) -> List[str]:
-    """过滤出运行时实际调用的算子（交集）"""
+    """过滤出运行时实际调用的算子（交集），算子名完全按 txt 列表原始名称，不做映射"""
     all_set = set(all_ops)
     result = []
     for op in runtime_ops:
-        # 直接匹配
         if op in all_set:
             result.append(op)
-            continue
-        # 尝试映射：运行时名 -> 注册名
-        mapped = RUNTIME_TO_ATEN_MAP.get(op)
-        if mapped and mapped in all_set:
-            result.append(mapped)
-            continue
-        # 尝试反向映射：aten 名 -> 运行时名
-        mapped = ATEN_TO_RUNTIME_MAP.get(op)
-        if mapped and mapped in all_set:
-            result.append(mapped)
-            continue
     return sorted(set(result))
 
 
