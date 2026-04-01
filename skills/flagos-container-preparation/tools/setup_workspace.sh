@@ -76,6 +76,14 @@ if [ -f "${PROJECT_ROOT}/skills/flagos-performance-testing/tools/performance_com
     echo "  ✓ performance_compare.py"
 fi
 
+# moban 格式报告生成
+if [ -f "${PROJECT_ROOT}/skills/flagos-performance-testing/tools/generate_moban_report.py" ]; then
+    docker cp "${PROJECT_ROOT}/skills/flagos-performance-testing/tools/generate_moban_report.py" \
+        "${CONTAINER}:/flagos-workspace/scripts/generate_moban_report.py"
+    SCRIPTS_COPIED=$((SCRIPTS_COPIED + 1))
+    echo "  ✓ generate_moban_report.py"
+fi
+
 # 算子优化
 if [ -f "${PROJECT_ROOT}/skills/flagos-operator-replacement/tools/operator_optimizer.py" ]; then
     docker cp "${PROJECT_ROOT}/skills/flagos-operator-replacement/tools/operator_optimizer.py" \

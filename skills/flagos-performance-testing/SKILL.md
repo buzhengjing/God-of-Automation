@@ -291,6 +291,45 @@ docker exec $CONTAINER bash -c "cd /flagos-workspace && python scripts/performan
 
 当 Optimized = Full（全量已达标）时，只传 `--flagos-full`，不传 `--flagos-optimized`。
 
+## 步骤 9.1：生成 moban 格式报告
+
+在最终报告输出的同时，同步生成一份 moban 格式的原始数据报告文件（`results/benchmark_report_moban.md`）。该报告按 V3 → V2 → V1 顺序输出三版原始 benchmark JSON 数据和算子信息，没有数据的版本自动跳过。
+
+```bash
+docker exec $CONTAINER bash -c "cd /flagos-workspace && PATH=/opt/conda/bin:\$PATH python scripts/generate_moban_report.py \
+  --results-dir /flagos-workspace/results \
+  --output /flagos-workspace/results/benchmark_report_moban.md \
+  --v2-debug-log /flagos-workspace/logs/startup_flagos.log \
+  --v2-ops-count \$V2_OPS_COUNT \
+  --v3-ops-count \$V3_OPS_COUNT \
+  \$( [ \"\$V2_REACHED_TARGET\" = 'true' ] && echo '--v2-reached-target' )"
+```
+
+参数说明：
+- `--v2-debug-log`：FlagGems 启动日志路径（`startup_flagos.log`），用于提取 `[DEBUG] flag_gems` 算子替换记录。注意：V3 重启会覆盖此文件，因此该日志仅在 V2 阶段（算子优化前）有效。如果已经过算子优化，此文件内容为 V3 的日志
+- `--v3-debug-log`：V3 启动日志路径。当前流程中 V3 复用 `startup_flagos.log`（会覆盖 V2 日志），如果需要 V3 独立日志，需在算子优化重启时指定不同日志路径
+- `--v2-ops-count` / `--v3-ops-count`：算子数量（从 context.yaml 的 `service.enable_oplist_count` 或 `optimization.enabled_ops` 长度获取），当无 debug 日志或日志被覆盖时作为备选
+- `--v2-reached-target`：V2 是否已达标（≥80%），影响 V2 标题行描述
+
+**日志覆盖注意**：`startup_flagos.log` 在每次 FlagGems 模式重启时会被覆盖。如果流程经过了算子优化（V2 不达标 → V3），该文件最终内容是 V3 的启动日志。此时 V2 的 debug 信息已丢失，脚本会使用 `--v2-ops-count` 参数填充算子数。建议在 V2 启动后、算子优化前，备份日志：
+```bash
+docker exec $CONTAINER cp /flagos-workspace/logs/startup_flagos.log /flagos-workspace/logs/startup_flagos_v2.log
+```
+备份后可同时传入两个日志：
+```bash
+  --v2-debug-log /flagos-workspace/logs/startup_flagos_v2.log \
+  --v3-debug-log /flagos-workspace/logs/startup_flagos.log \
+```
+
+**测试用例名称映射**（JSON key → 报告标题）：
+| JSON key | 报告标题 |
+|----------|----------|
+| `prefill1_decode512` / `1_input_512_output` | `1&512` |
+| `1k_input_1k_output` | `1k&1k` |
+| `4k_input_1k_output` | `4k&1k` |
+| `16k_input_1k_output` | `16k&1k` |
+| `32k_input_1k_output` | `32k&1k` |
+
 ## 步骤 10：写入 context.yaml
 
 ---

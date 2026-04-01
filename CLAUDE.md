@@ -120,6 +120,7 @@ bash skills/flagos-container-preparation/tools/setup_workspace.sh $CONTAINER
 - `wait_for_service.sh` — 服务就绪检测（指数退避）
 - `benchmark_runner.py` — 性能测试
 - `performance_compare.py` — 性能对比
+- `generate_moban_report.py` — moban 格式报告生成（三版原始 benchmark JSON + 算子信息）
 - `operator_optimizer.py` — 算子优化
 - `operator_search.py` — 算子搜索编排
 - `diagnose_ops.py` — 算子快速诊断（崩溃日志解析、精度分组测试、性能热点预扫描）
@@ -292,6 +293,7 @@ TRACE_EOF"
 
 **交付物清单**：
 - `results/` — 性能/精度结果文件
+- `results/benchmark_report_moban.md` — moban 格式原始数据报告（三版 benchmark JSON + 算子信息）
 - `traces/` — 全流程执行留痕
 - `logs/` — 服务和评测运行日志
 - `config/context_snapshot.yaml` — 流程结束时的完整 context 快照
@@ -339,6 +341,8 @@ GPU: <gpu_count>x <gpu_type>
 结论: V3 (Optimized) 达标(≥80%) / 不达标
 ========================================
 ```
+
+**同步生成 moban 格式报告**：在输出上述标准报告的同时，必须调用 `generate_moban_report.py` 生成 `results/benchmark_report_moban.md`。该报告按 V3 → V2 → V1 顺序输出三版原始 benchmark JSON 数据和算子替换信息，没有数据的版本自动跳过不写入。详见 `flagos-performance-testing/SKILL.md` 步骤 9.1。
 
 ---
 
