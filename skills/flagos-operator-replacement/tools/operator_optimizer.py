@@ -391,13 +391,15 @@ def init_optimization(ops_file: str, native_throughput: float,
     else:
         search_mode = "linear"
 
-    # Plugin 场景：OOT 搜索阶段
+    # Plugin 场景：OOT 搜索阶段（降级为后备，FlagGems 搜索优先）
     effective_oot_ops = oot_ops if oot_ops else list(OOT_OPERATORS)
     oot_state = {}
-    search_phase = search_mode  # 默认直接进入对应搜索模式
+    search_phase = search_mode  # 默认直接进入对应搜索模式（FlagGems 优先）
 
     if plugin_mode:
-        search_phase = "oot"  # plugin 场景先搜索 OOT 层
+        # FlagGems 优先：先搜索 torch 底层算子，达标即停
+        # OOT 作为后备：仅当 FlagGems 搜索不达标时才进入 OOT 阶段
+        search_phase = search_mode
         oot_state = {
             "tested": [],
             "blacklist": [],
@@ -426,7 +428,7 @@ def init_optimization(ops_file: str, native_throughput: float,
         "status": "in_progress",
         "search_mode": search_mode,
         "search_direction": "reverse" if reverse else "forward",
-        "search_phase": search_phase,  # oot -> progressive/group -> done
+        "search_phase": search_phase,  # progressive/group -> oot(后备) -> done
         "plugin_mode": plugin_mode,
         "oot_state": oot_state,
         "oot_blacklist": [],
@@ -454,7 +456,7 @@ def init_optimization(ops_file: str, native_throughput: float,
     print(f"算子控制: {'白名单 (WHITELIST)' if state['use_whitelist'] else '黑名单 (BLACKLIST)'}")
     if plugin_mode:
         print(f"Plugin 模式: OOT 算子 {len(effective_oot_ops)} 个 ({', '.join(effective_oot_ops)})")
-        print(f"搜索阶段: OOT -> {search_mode} -> done")
+        print(f"搜索阶段: {search_mode} -> OOT(后备) -> done")
     if search_mode == "progressive":
         ps = progressive_state
         for rnd in ps["rounds"]:
@@ -503,13 +505,11 @@ def get_next_action_oot(state: Dict[str, Any], state_path: Optional[str] = None)
                 "message": f"OOT 累积验证: 禁用 {len(oot_blacklist)} 个 OOT 算子 ({', '.join(oot_blacklist)})",
             }
         else:
-            # 无需禁用任何 OOT 算子，直接进入下一阶段
-            search_mode = state.get("search_mode", "group")
-            state["search_phase"] = search_mode
+            # 无需禁用任何 OOT 算子，OOT 搜索也无法改善 → 标记失败
+            state["status"] = "failed"
+            state["completed_at"] = datetime.now().isoformat()
             save_state(state, state_path)
-            if search_mode == "progressive":
-                return get_next_action_progressive(state, state_path)
-            return get_next_action_group(state, state_path)
+            return {"action": "failed", "message": "FlagGems + OOT 搜索均不达标，无可禁用的 OOT 算子"}
 
     current_op = oot_ops[idx]
     state["current_step"] += 1
@@ -549,6 +549,15 @@ def get_next_action_group(state: Dict[str, Any], state_path: Optional[str] = Non
     groups = state.get("groups", {})
 
     if gs["phase"] == "done" or gs["current_group_idx"] >= len(gs["group_order"]):
+        # 检查是否达标
+        current_ratio = state.get("current_ratio", 0)
+        target_ratio = state.get("target_ratio", 0.8)
+        if current_ratio < target_ratio and state.get("plugin_mode"):
+            # Plugin 模式：FlagGems 分组搜索不达标，转入 OOT 后备搜索
+            state["search_phase"] = "oot"
+            state["status"] = "in_progress"
+            save_state(state, state_path)
+            return get_next_action_oot(state, state_path)
         state["status"] = "completed"
         state["completed_at"] = datetime.now().isoformat()
         _compute_final_lists(state, state.get("disabled_ops", []))
@@ -632,6 +641,13 @@ def get_next_action_group_reverse(state: Dict[str, Any],
     groups = state.get("groups", {})
 
     if gs["phase"] == "done" or gs["current_group_idx"] >= len(gs["group_order"]):
+        current_ratio = state.get("current_ratio", 0)
+        target_ratio = state.get("target_ratio", 0.8)
+        if current_ratio < target_ratio and state.get("plugin_mode"):
+            state["search_phase"] = "oot"
+            state["status"] = "in_progress"
+            save_state(state, state_path)
+            return get_next_action_oot(state, state_path)
         state["status"] = "completed"
         state["completed_at"] = datetime.now().isoformat()
         _compute_final_lists(state, state.get("disabled_ops", []))
@@ -802,9 +818,15 @@ def _update_progressive_result(state: Dict[str, Any], op_name: str,
         ps["current_round"] = current_round + 1
 
         if current_round + 1 >= len(rounds):
-            state["status"] = "failed"
-            state["completed_at"] = datetime.now().isoformat()
-            print(f"  [Progressive] 所有轮次均不达标 — 搜索失败")
+            # Plugin 模式：FlagGems 搜索不达标，转入 OOT 后备搜索
+            if state.get("plugin_mode"):
+                state["search_phase"] = "oot"
+                state["status"] = "in_progress"
+                print(f"  [Progressive] 所有轮次均不达标 — 转入 OOT 后备搜索")
+            else:
+                state["status"] = "failed"
+                state["completed_at"] = datetime.now().isoformat()
+                print(f"  [Progressive] 所有轮次均不达标 — 搜索失败")
         else:
             next_round = rounds[current_round + 1]
             next_ops = ps["excluded_by_round"].get(next_round, [])
@@ -818,6 +840,13 @@ def get_next_action_linear(state: Dict[str, Any], state_path: Optional[str] = No
     search_ops = state.get("search_ops", state["all_ops"])
 
     if step >= len(search_ops):
+        current_ratio = state.get("current_ratio", 0)
+        target_ratio = state.get("target_ratio", 0.8)
+        if current_ratio < target_ratio and state.get("plugin_mode"):
+            state["search_phase"] = "oot"
+            state["status"] = "in_progress"
+            save_state(state, state_path)
+            return get_next_action_oot(state, state_path)
         state["status"] = "completed"
         _compute_final_lists(state, state.get("disabled_ops", []))
         save_state(state, state_path)
@@ -853,18 +882,16 @@ def get_next_action(state_path: Optional[str] = None) -> Dict[str, Any]:
 
     search_phase = state.get("search_phase", "group")
 
-    # OOT 阶段（plugin 场景）
+    # OOT 阶段（plugin 场景，作为 FlagGems 搜索不达标后的后备）
     if search_phase == "oot":
         return get_next_action_oot(state, state_path)
     elif search_phase == "oot_verify":
-        # 累积验证已完成，根据结果决定下一步（由 update 处理）
-        # 如果还在 oot_verify 说明 update 后没切换，进入下一阶段
-        search_mode = state.get("search_mode", "group")
-        state["search_phase"] = search_mode
+        # OOT 累积验证已完成，由 update 处理最终判定
+        # 如果还在 oot_verify 说明 update 后没切换 → 标记失败（FlagGems + OOT 都搜完了）
+        state["status"] = "failed"
+        state["completed_at"] = datetime.now().isoformat()
         save_state(state, state_path)
-        if search_mode == "progressive":
-            return get_next_action_progressive(state, state_path)
-        return get_next_action_group(state, state_path)
+        return {"action": "failed", "message": "FlagGems + OOT 搜索均不达标"}
 
     # progressive / group / linear 阶段
     search_mode = state.get("search_mode", "group")
@@ -1062,9 +1089,14 @@ def update_result(op_name: str, throughput: Optional[float] = None,
     # 检查线性模式是否完成
     search_ops = state.get("search_ops", state["all_ops"])
     if search_mode == "linear" and state["current_step"] >= len(search_ops) and state["status"] != "completed":
-        state["status"] = "completed"
-        state["completed_at"] = datetime.now().isoformat()
-        _compute_final_lists(state, state.get("disabled_ops", []))
+        if ratio < target_ratio and state.get("plugin_mode"):
+            # Plugin 模式：线性搜索不达标，转入 OOT 后备
+            state["search_phase"] = "oot"
+            state["status"] = "in_progress"
+        else:
+            state["status"] = "completed"
+            state["completed_at"] = datetime.now().isoformat()
+            _compute_final_lists(state, state.get("disabled_ops", []))
 
     save_state(state, state_path)
 
@@ -1096,11 +1128,12 @@ def _update_oot_result(state: Dict[str, Any], op_name: str,
             _compute_final_lists(state, [])  # OOT 达标，flagos 层无需排除
             print(f"  [OOT 累积] 达标 {ratio*100:.1f}% - 搜索完成")
         else:
-            search_mode = state.get("search_mode", "group")
             log_entry["decision"] = "oot_insufficient"
-            log_entry["reason"] = f"OOT 禁用后 ratio {ratio*100:.1f}% < {target_ratio*100:.0f}%, 进入 {search_mode} 搜索"
-            state["search_phase"] = search_mode
-            print(f"  [OOT 累积] 未达标 {ratio*100:.1f}% - 进入 {search_mode} 阶段")
+            log_entry["reason"] = f"OOT 禁用后 ratio {ratio*100:.1f}% < {target_ratio*100:.0f}%, FlagGems + OOT 均不达标"
+            state["search_phase"] = "done"
+            state["status"] = "failed"
+            state["completed_at"] = datetime.now().isoformat()
+            print(f"  [OOT 累积] 未达标 {ratio*100:.1f}% - FlagGems + OOT 搜索均失败")
         return
 
     # 单个 OOT 算子测试

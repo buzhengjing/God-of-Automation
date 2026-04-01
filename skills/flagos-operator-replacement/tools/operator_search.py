@@ -581,7 +581,7 @@ def run_full_search(state_path: str, perf_config: str,
     print(f"# 算子搜索开始 (最多 {max_rounds} 轮)")
     if plugin_mode:
         _search_mode = _state.get("search_mode", "progressive")
-        print(f"# 模式: Plugin (OOT → {_search_mode} 两阶段)")
+        print(f"# 模式: Plugin ({_search_mode} → OOT(后备) 两阶段)")
     print(f"# 搜索方向: {search_direction}")
     print(f"{'#' * 60}\n")
 

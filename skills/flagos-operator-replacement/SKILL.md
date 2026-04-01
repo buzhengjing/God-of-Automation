@@ -1,6 +1,6 @@
 ---
 name: flagos-operator-replacement
-description: 算子替换与优化工具，支持被动排除（评测报错）和主动两阶段搜索优化（OOT→渐进排除），适配 plugin 环境变量控制和非 plugin Layer 1-4 分层降级，算子列表自动发现，全自动搜索编排，反向二分搜索 + 框架验证 + 排序校验
+description: 算子替换与优化工具，支持被动排除（评测报错）和主动两阶段搜索优化（渐进排除→OOT），适配 plugin 环境变量控制和非 plugin Layer 1-4 分层降级，算子列表自动发现，全自动搜索编排，反向二分搜索 + 框架验证 + 排序校验
 version: 6.0.0
 license: internal
 triggers:
@@ -31,7 +31,7 @@ provides:
 独立工具，可在任何阶段按需调用。支持两种模式：
 
 1. **被动排除模式**：根据评测报错信息排除问题算子（沿用 Layer 1-4 分层降级）
-2. **主动优化模式**：两阶段搜索（OOT → 渐进排除），使 FlagOS 性能 ≥ 目标比率
+2. **主动优化模式**：两阶段搜索（FlagGems 渐进排除 → OOT 后备），使 FlagOS 性能 ≥ 目标比率
 
 **工具脚本**（已由 setup_workspace.sh 部署到容器）:
 - `operator_optimizer.py` — 算子优化器（OOT 搜索 + 渐进排除搜索、算子列表自动发现、映射表生成）
@@ -508,10 +508,32 @@ USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true VLLM_FL_OOT_BLACKLIST=fused_moe VLLM_
 
 ## 搜索策略
 
-**两阶段搜索**（由外到内、由粗到细）：
+**两阶段搜索**（FlagGems 优先，OOT 后备）：
 
 ```
-阶段 1: OOT 层逐个排查（≤5 轮，仅 plugin 场景）
+阶段 1: 先验预筛 + 渐进排除（默认策略 progressive，最多 3 轮）
+  基于算子功能的先验知识，将算子按性能影响力分为 high/medium/low 三级。
+  逐轮排除，达标即停：
+
+  Round 1: 排除 high 风险算子（matmul/linear/softmax/rms_norm 等 ~8 个）
+           → benchmark → 达标？→ 结束（跳过 OOT）
+           → 不达标？→ Round 2
+
+  Round 2: 追加排除 medium 风险算子（embedding/gelu/silu 等 ~10 个）
+           → benchmark → 达标？→ 结束（跳过 OOT）
+           → 不达标？→ Round 3
+
+  Round 3: 追加排除 low 风险算子（copy_/add/mul 等基础运算）
+           → benchmark → 达标？→ 结束（跳过 OOT）
+           → 不达标？→ 进入阶段 2（仅 plugin 场景）
+
+  Plugin 场景：通过 VLLM_FL_FLAGOS_BLACKLIST 环境变量控制
+  非 plugin 场景：通过 Layer 1-4 策略控制
+  每轮重启后读取 txt 文件验证算子变化
+
+  备选策略：--search-strategy group（分组二分搜索）或 linear（线性逐个搜索）
+
+阶段 2: OOT 层逐个排查（≤5 轮，仅 plugin 场景，FlagGems 不达标时才进入）
   for each oot_op in [silu_and_mul, rms_norm, rotary_embedding, fused_moe, attention_backend]:
     1. 设置 VLLM_FL_OOT_BLACKLIST=oot_op（内联环境变量）
     2. 重启服务 + quick benchmark
@@ -520,35 +542,17 @@ USE_FLAGGEMS=1 VLLM_FL_PREFER_ENABLED=true VLLM_FL_OOT_BLACKLIST=fused_moe VLLM_
 
   累积 OOT blacklist 后 benchmark：
     if 每个用例每个并发级别 ratio >= 80% → 搜索完成
-    else → 进入阶段 2
-
-阶段 2: 先验预筛 + 渐进排除（默认策略 progressive，最多 3 轮）
-  基于算子功能的先验知识，将算子按性能影响力分为 high/medium/low 三级。
-  逐轮排除，达标即停：
-
-  Round 1: 排除 high 风险算子（matmul/linear/softmax/rms_norm 等 ~8 个）
-           → benchmark → 达标？→ 结束
-           → 不达标？→ Round 2
-
-  Round 2: 追加排除 medium 风险算子（embedding/gelu/silu 等 ~10 个）
-           → benchmark → 达标？→ 结束
-           → 不达标？→ Round 3
-
-  Round 3: 追加排除 low 风险算子（copy_/add/mul 等基础运算）
-           → benchmark → 达标？→ 结束
-           → 不达标？→ 问题不在算子层面，标记失败
-
-  Plugin 场景：通过 VLLM_FL_FLAGOS_BLACKLIST 环境变量控制
-  非 plugin 场景：通过 Layer 1-4 策略控制
-  每轮重启后读取 txt 文件验证算子变化
-
-  备选策略：--search-strategy group（分组二分搜索）或 linear（线性逐个搜索）
+    else → 标记失败（FlagGems + OOT 均不达标）
 ```
 
-**为什么先搜 OOT 层？**
-- OOT 算子只有 5 个，但每个都是高层融合算子，单个对性能影响巨大
-- 阶段 1 最多 5 轮即可完成
-- 如果性能问题在 OOT 层，无需搜索几十个底层算子
+**为什么先搜 FlagGems 层？**
+- FlagGems torch 底层算子数量多（20-30 个），渐进排除最多 3 轮即可定位问题所在的风险等级
+- 大多数性能问题来自底层算子，先搜 FlagGems 命中率更高
+- 达标即停，保留尽可能多的算子，无需进入 OOT 阶段
+
+**OOT 作为后备的原因**
+- OOT 算子只有 5 个高层融合算子，禁用代价较大（影响整体融合优化）
+- 仅当 FlagGems 层调优无法达标时，才考虑禁用 OOT 算子
 
 **为什么用渐进排除而非分组二分？**
 - 算子列表通常只有 20-30 个，分组二分轮次过多（最坏 ~22 轮）
@@ -780,7 +784,7 @@ MetaX C500 + Qwen3-8B：309 个注册算子仅 26 个运行时执行，全量 Fl
 
 ## 搜索限制
 
-- Plugin 两阶段搜索：OOT ≤5 轮 + group ≤15 轮 ≈ 20 轮
+- Plugin 两阶段搜索：group/progressive ≤15 轮 + OOT ≤5 轮(后备) ≈ 20 轮
 - 非 plugin 渐进排除搜索：预计 3 轮左右完成
 - 线性搜索：遍历搜索范围内所有算子一轮
 - 贪心搜索 3 轮仍未达标时，询问用户是否继续
@@ -807,7 +811,7 @@ optimization:
   target_ratio: 0.8
   current_ratio: 0.85
   search_mode: "group"
-  search_phase: "done"           # oot | group | done
+  search_phase: "done"           # progressive/group -> oot(后备) -> done
   plugin_mode: true
   enabled_ops: [<最终启用列表>]
   disabled_ops: [<最终禁用列表>]
